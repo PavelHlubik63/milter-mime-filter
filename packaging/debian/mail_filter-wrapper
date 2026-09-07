@@ -1,0 +1,20 @@
+#!/bin/sh
+# Thin wrapper so admins can run "mail_filter --configtest" etc. from $PATH,
+# like every other Postfix-adjacent daemon (opendkim, postfix itself). The
+# real implementation stays in /usr/lib/mail_filter/ -- Debian Policy 9.1.1
+# reserves /usr/local for the system administrator's own installs, so
+# package-owned files never go there, and the entry-point script needs its
+# mail_filter/ package sitting next to it (see mail_filter.py's own
+# docstring), so both live together under /usr/lib/mail_filter/ rather than
+# splitting the launcher into /usr/sbin.
+
+# Keep Python from writing .pyc files into the package's own directory.
+# The daemon never did -- rc.d and the systemd unit both set this -- but
+# the wrapper is what an administrator runs by hand, as root, every time
+# the man pages say to check the rules with "mail_filter --configtest".
+# That import wrote a __pycache__/ into the installed tree that neither
+# pkg(8) nor dpkg knows about, so neither removes it again on deinstall.
+PYTHONDONTWRITEBYTECODE=1
+export PYTHONDONTWRITEBYTECODE
+
+exec /usr/bin/python3 /usr/lib/mail_filter/mail_filter.py "$@"

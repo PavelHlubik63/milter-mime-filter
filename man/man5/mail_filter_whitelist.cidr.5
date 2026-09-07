@@ -1,0 +1,167 @@
+.TH MAIL_FILTER_WHITELIST.CIDR 5 "August 2026" "mail_filter 1.0.0" "File Formats"
+.nh
+.SH NAME
+mail_filter_whitelist.cidr \- IP address whitelist for mail_filter
+.SH SYNOPSIS
+.TP 40
+.I /usr/local/etc/mail_filter/mail_filter_whitelist.cidr
+FreeBSD
+.TP
+.I /etc/mail_filter/mail_filter_whitelist.cidr
+Linux
+.SH DESCRIPTION
+The whitelist file lists the IP addresses and CIDR network ranges whose
+mail bypasses filtering entirely -- both the Subject and body rules.
+When a connecting client's IP address matches any entry in this file,
+.BR mail_filter (8)
+accepts the message without evaluating any rules, regardless of the
+Subject or body content.
+.PP
+The whitelist is intended to cover the same senders as Postfix's
+.B mynetworks
+and any trusted relay hosts.
+Failing to include these addresses can cause legitimate outbound mail
+or relay traffic to be incorrectly rejected.
+.PP
+The whitelist is loaded at startup and can be reloaded without
+restarting the milter. The
+.B whitelist
+setting in
+.B mail_filter.conf
+may use either an absolute path or a path relative to the directory
+containing that configuration file.
+On FreeBSD:
+.BR "service mail_filter reload" .
+On Linux:
+.BR "systemctl reload mail_filter" .
+.SH FILE FORMAT
+One entry per line.
+Each entry is one of:
+.TP
+.I IPv4 address
+A single IPv4 address in dotted-decimal notation.
+Example:
+.BR 192.0.2.10 .
+.TP
+.I IPv6 address
+A single IPv6 address in standard notation.
+Example:
+.BR 2001:db8::1 .
+.TP
+.I IPv4 CIDR range
+An IPv4 network in CIDR notation.
+Example:
+.BR 192.168.1.0/24 .
+.TP
+.I IPv6 CIDR range
+An IPv6 network in CIDR notation.
+Example:
+.BR 2001:db8::/32 .
+.PP
+Text following a
+.B #
+character on any line is treated as a comment and ignored.
+Lines that are empty or contain only whitespace and comments are
+ignored.
+Host bits set in CIDR entries (e.g.
+.IR 192.168.1.5/24 )
+are silently masked; the effective entry is the network address
+.RI ( 192.168.1.0/24 ).
+.SH BEHAVIOUR
+When the client IP matches a whitelist entry:
+.IP \(bu 4
+All filter rules are skipped unconditionally.
+The message is accepted (Milter ACCEPT).
+.IP \(bu 4
+The Subject header is still decoded and both the raw and decoded forms
+are logged at INFO level, together with the retained body size and
+entity count.
+This provides a passive audit trail even for whitelisted senders and
+makes it easy to verify that encoding and decoding work correctly for
+trusted hosts.
+.IP \(bu 4
+A single log line records the whitelist hit:
+.nf
+.RS
+
+INFO [ID] qid=... result=ACCEPT reason=whitelisted ip=... envelope_from=... envelope_to=...
+.RE
+.fi
+.SH WHAT TO INCLUDE
+.TP
+.B Loopback addresses
+Always include
+.I 127.0.0.1
+and
+.IR ::1 .
+Locally injected mail (cron jobs, monitoring, locally delivered mail
+sent through the submission port) typically connects from loopback.
+.TP
+.B Postfix mynetworks
+Include all networks from the Postfix
+.I mynetworks
+parameter.
+These are the hosts Postfix considers to be local clients and permits
+to relay.
+If they are not whitelisted they will be filtered along with inbound
+Internet mail.
+.TP
+.B Internal relay hosts
+Any server that relays through this Postfix instance using an internal
+IP address that would not pass Postfix's relay restrictions by IP
+should be listed here.
+.TP
+.B Other milter servers
+If another server in your infrastructure sends mail through this
+Postfix instance (for example a secondary MX), include its IP address.
+.SH EXAMPLE
+.nf
+.RS
+# mail_filter_whitelist.cidr
+
+# Loopback
+127.0.0.1
+::1
+
+# Local networks (match Postfix mynetworks)
+192.168.1.0/24
+10.0.0.0/8
+
+# Static outbound IP of this mail server
+203.0.113.42
+
+# Trusted relay -- secondary MX
+198.51.100.7   # mx2.example.com
+.RE
+.fi
+.SH NOTES
+The whitelist works at the
+.B IP address
+level only.
+There is no provision for whitelisting by envelope sender, recipient,
+or domain.
+If finer-grained exceptions are required, express them in the rules file.
+Rules can combine Subject tests with
+.B envelope_from
+(or other envelope/header tests), for example by using
+.B not
+to exempt a trusted sender from a broader Subject rule.
+.PP
+Entries are checked on every connection using Python's
+.I ipaddress
+module.
+Performance is linear in the number of whitelist entries; for the
+typical case of a few dozen entries the cost is negligible.
+.SH SEE ALSO
+.BR mail_filter (8),
+.BR mail_filter.conf (5),
+.BR mail_filter_rules.conf (5)
+.SH AUTHORS
+Pavel Hlubík <phlubik@seznam.cz>
+.SH COPYRIGHT
+Copyright \(co Pavel Hlubík <phlubik@seznam.cz>
+.PP
+Free software, provided \(lqas is\(rq without any warranty of any kind.
+The author accepts no liability for any damage or data loss
+arising from the use of this software.
+Use at your own risk.

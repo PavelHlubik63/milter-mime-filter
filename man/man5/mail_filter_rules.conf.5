@@ -1,0 +1,1101 @@
+.TH MAIL_FILTER_RULES.CONF 5 "August 2026" "mail_filter 1.0.0" "File Formats"
+.nh
+.SH NAME
+mail_filter_rules.conf \- policy rules for mail_filter
+.SH SYNOPSIS
+.TP 40
+.I /usr/local/etc/mail_filter/mail_filter_rules.conf
+FreeBSD
+.TP
+.I /etc/mail_filter/mail_filter_rules.conf
+Linux
+.SH DESCRIPTION
+The rules file defines policy rules that
+.BR mail_filter (8)
+evaluates for each incoming message.
+.PP
+Every rule below can test any combination of the decoded Subject header,
+the raw message body, the envelope sender (MAIL FROM), envelope
+recipients (RCPT TO), and any message header including
+.IR From ,
+.IR To ,
+.IR Cc ,
+.I Reply-To
+and arbitrary
+.I X\-headers
+\(em in the same rule, if needed. This makes it possible to write a
+single rule such as \(lqreject if the Subject looks like an invoice AND
+the body asks for a wire transfer\(rq.
+.PP
+Conditions are composed with the infix logical operators
+.BR and ,
+.BR or ,
+and
+.BR not ,
+with parentheses used for grouping \(em similar to Python or most
+general-purpose languages.
+The legacy function-style combinators
+.BR anyof( ) ,
+.BR allof( ) ,
+and
+.BR not( )
+(as used by the Sieve mail filtering language) remain fully supported
+and may be freely mixed with the new operators; see
+.B "LOGICAL OPERATORS"
+below.
+.PP
+Rules are evaluated top-to-bottom.
+Evaluation stops at the first
+.B reject
+or
+.B accept
+action.
+If no rule matches the message is accepted silently.
+.SH FILE FORMAT
+Lines that are empty or begin with
+.B #
+are ignored.
+Rules are written as
+.B if
+statements with
+.BR {  }
+blocks.
+.PP
+.nf
+.RS
+if \fIcondition\fR {
+    \fIaction\fR;
+}
+
+if \fIcondition\fR {
+    \fIaction\fR;
+} else if \fIcondition\fR {
+    \fIaction\fR;
+} else {
+    \fIaction\fR;
+}
+.RE
+.fi
+.PP
+Blocks may contain further
+.B if
+statements (arbitrary nesting).
+.SH LOGICAL OPERATORS
+.SS Infix operators (recommended)
+.TP
+.I cond1 \fBand\fI cond2\fR
+True only if \fIboth\fR conditions are true.
+.TP
+.I cond1 \fBor\fI cond2\fR
+True if \fIeither\fR condition is true.
+.TP
+.BI not\ cond
+Negates \fIcond\fR.
+Parentheses around \fIcond\fR are optional unless needed for grouping
+(see precedence below); e.g. both
+.I "not envelope_from /pattern/i"
+and
+.I "not(envelope_from /pattern/i)"
+are valid and equivalent.
+.PP
+\fBand\fR, \fBor\fR and \fBnot\fR may be chained and combined freely, e.g.:
+.PP
+.nf
+.RS
+if subject /pattern/i and not envelope_from /pattern2/i {
+    reject;
+}
+
+if subject /a/i and not (envelope_from /x/i or envelope_from /y/i) {
+    reject;
+}
+.RE
+.fi
+.SS Operator precedence
+From highest to lowest:
+.B not
+\(rs
+.B and
+\(rs
+.BR or .
+This is the same convention used by Python and most languages, so
+.RS
+.I "a or b and not c"
+.RE
+parses as
+.RS
+.I "a or (b and (not c))" .
+.RE
+Use parentheses whenever the intended grouping is not obvious \(em
+this is a common source of subtle rule bugs.
+For example,
+.RS
+.I "subject /x/i or subject /y/i and envelope_from /z/i"
+.RE
+means \(lqreject if x, OR if (y AND z)\(rq \(em it does
+.B NOT
+require \fIz\fR when \fIx\fR matches.
+If the intent was \(lqx or y, and always require z\(rq, parentheses
+are required:
+.RS
+.I "(subject /x/i or subject /y/i) and envelope_from /z/i"
+.RE
+.SS Legacy function-style combinators
+The original Sieve-like syntax remains fully supported and is
+parsed identically to the equivalent infix expression:
+.TP
+.BI anyof( cond ", " cond ", " \fR...\fR )
+True if \fIat least one\fR child condition is true (logical OR).
+Requires at least two arguments.
+Equivalent to chaining the children with
+.BR or .
+.TP
+.BI allof( cond ", " cond ", " \fR...\fR )
+True if \fIall\fR child conditions are true (logical AND).
+Requires at least two arguments.
+Equivalent to chaining the children with
+.BR and .
+.TP
+.BI not( cond )
+Negates the child condition.
+Equivalent to
+.I "not cond"
+in the infix syntax.
+.PP
+Because
+.B anyof(...)
+and
+.B allof(...)
+are ordinary primaries in the condition grammar, they may be freely
+mixed with
+.BR and / or / not
+and with parenthesized sub-expressions, e.g.:
+.PP
+.nf
+.RS
+if allof(
+    subject /invoice/i,
+    not anyof(
+        rcpt_to /^<accounting@example\.com>$/i,
+        rcpt_to /^<director@example\.com>$/i
+    )
+) {
+    reject "Invoice: unauthorized recipient";
+}
+
+\fR\(em is exactly equivalent to \(em
+
+if subject /invoice/i and not (
+    rcpt_to /^<accounting@example\.com>$/i or rcpt_to /^<director@example\.com>$/i
+) {
+    reject "Invoice: unauthorized recipient";
+}
+.RE
+.fi
+There is no functional difference between the two forms; pick
+whichever reads more clearly for a given rule.
+.B allof/anyof
+tend to read better for long lists of conditions, while
+.B and/or/not
+tend to read better for short, natural-language-like expressions.
+.SH CONDITIONS
+.SS Test keywords
+Each test consists of a keyword followed by either an inline
+.I /regex/flags
+literal or a
+.BI refile: path
+reference to a file containing regex literals.
+The pattern is applied with
+.I re.search()
+so it need not be anchored.
+The
+.B refile:
+form is accepted by every regex-based test described below, including
+.B header \(dqName\(dq.
+.TP
+.BI subject " /pattern/flags"
+Match the decoded Subject header.
+RFC\~2047 encoded-words (=?UTF-8?Q?...?=) are decoded to Unicode
+before the pattern is tested.
+.TP
+.BI body " /pattern/flags"
+Match the raw message body as UTF-8 text.
+Only the first
+.B max_body_kb
+kilobytes of the body are retained and tested; see
+.BR mail_filter.conf (5).
+Before matching, quoted-printable soft line breaks
+.RI ( "=\e\enor=\er\en" )
+are merged so that an entity or word artificially split across a QP
+line boundary (e.g.\& \fI&#22=\er\en5;\fR) is rejoined into
+\fI&#225;\fR first. The body is
+.B not
+MIME-decoded or HTML-stripped before matching \(em patterns are
+matched against the wire-level text of the part(s) Postfix hands to
+the milter, including any HTML markup and entities. Use this to
+detect obfuscation techniques such as heavy HTML-entity encoding; see
+.B SECTION 3
+of the sample
+.B mail_filter_rules.conf
+for an example.
+.TP
+.BI envelope_from " /pattern/flags"
+Match the SMTP MAIL FROM address (envelope sender) as supplied by Postfix.
+The angle brackets are included, e.g.\&
+.IR <sender@example.com> .
+When anchoring with
+.B $
+remember the trailing
+.BR > ,
+e.g.
+.I /@example\.com>$/i
+or simply leave the pattern unanchored.
+.TP
+.BI envelope_to " /pattern/flags"
+.TQ
+.BI rcpt_to " /pattern/flags"
+True if the pattern matches
+.I any
+envelope RCPT TO address.
+Both keywords are synonymous.
+The angle brackets are included, same as
+.IR envelope_from .
+.TP
+.BI from " /pattern/flags"
+Match the decoded and unfolded
+.I From:
+header value (the header, not the envelope sender). RFC 2047 encoded-words
+are decoded before matching.
+.TP
+.BI to " /pattern/flags"
+Match the decoded and unfolded
+.I To:
+header value.
+.TP
+.BI cc " /pattern/flags"
+Match the decoded and unfolded
+.I Cc:
+header value.
+.TP
+.BI reply_to " /pattern/flags"
+Match the decoded and unfolded
+.I Reply-To:
+header value.
+.TP
+.BI header " \(dqName\(dq /pattern/flags"
+Match a named header.
+The name is case-insensitive.
+True if the pattern matches
+.I any
+occurrence when the header appears multiple times.
+.SS Regex files (refile:)
+Instead of an inline regex, any test may refer to a file of regular
+expressions using:
+.PP
+.nf
+.RS
+subject refile:/etc/mail_filter/spam_subjects.regex
+header "X-Spam-Status" refile:lists/spam-status.regex
+.RE
+.fi
+.PP
+A regex-file path may be absolute or relative.
+A relative path is resolved relative to the directory containing the
+main
+.B mail_filter_rules.conf
+file, not relative to the daemon's current working directory.
+For example, if the rules file and
+.I spam_subjects.regex
+are in the same directory, the preferred compact form is:
+.PP
+.nf
+.RS
+subject refile:spam_subjects.regex
+.RE
+.fi
+.PP
+Absolute paths remain fully supported.
+Paths containing whitespace are not supported.
+.PP
+The referenced file is UTF-8 text. Empty lines and lines whose first
+non-whitespace character is
+.B #
+are ignored. Every other line must contain exactly one regex literal:
+.PP
+.nf
+.RS
+/pattern/flags
+/another\es+pattern/i
+/^prefix-/ms
+.RE
+.fi
+.PP
+The same flags
+.BR i ,
+.BR m ,
+.BR s
+and
+.B x
+are available as for inline regexes. Unicode escape preprocessing is
+also identical.
+.PP
+Regex files are read and compiled when the rules are loaded. This occurs
+at daemon startup, during
+.B --configtest
+and during a SIGUSR1 rules reload.
+.PP
+Regex files are not opened for each message. An empty regex file is valid
+and never matches. An unreadable file, malformed line, or invalid regular
+expression causes a rules parse error.
+.PP
+When a regex from a referenced file matches, logging and
+.B --test
+identify the referenced file, its line number, and the exact regex literal
+that matched.
+.SS Regex flags
+Flags follow the closing
+.B /
+of the pattern with no spaces.
+.TP
+.B i
+Case-insensitive.
+.TP
+.B m
+Multiline:
+.B ^
+and
+.B $
+match at line boundaries within the value.
+.TP
+.B s
+Dotall: the dot metacharacter matches newlines.
+.TP
+.B x
+Verbose: unescaped whitespace and inline
+.B #
+comments inside the pattern are ignored.
+.SS Unicode escape sequences in patterns
+The milter preprocesses the following sequences before passing the
+pattern to the regex engine, making it safe to specify code points
+as ASCII text:
+.TP
+.BI \eu xxxx
+Unicode code point (four hex digits, BMP only).
+.TP
+.BI \eU xxxxxxxx
+Unicode code point (eight hex digits, required for supplementary
+planes such as emoji and CJK Extension B).
+.PP
+Example:
+.nf
+.RS
+subject /[\eu3040-\eu30FF\eu4E00-\eu9FFF]/  -- Japanese/Chinese
+subject /[\eU0001F300-\eU0001F9FF]/          -- emoji
+.RE
+.fi
+.SS Example using a regex file
+With this rule:
+.PP
+.nf
+.RS
+if subject refile:spam_subjects.regex {
+    reject "Spam";
+}
+.RE
+.fi
+.PP
+and this contents of
+.IR spam_subjects.regex :
+.PP
+.nf
+.RS
+/free money/i
+/urgent\es+payment/i
+/^cryptocurrency offer/
+/Action Needed\es*:\es*Account (?:Inactive|Suspended|Locked)/i
+/\ed+\es*%\es*(?:off|discount)/i
+/Your (?:cloud|storage|account) (?:is|will be) (?:full|disabled|suspended)/i
+/\e$\ed+(?:\e.\ed+)?\es+(?:reward|bonus|prize)/i
+/^(?:FWD?|RE):\es*/i
+/verify your account (?:now|immediately|today)/i
+.RE
+.fi
+.PP
+the condition is true if any one of the file's regexes matches the
+decoded Subject. This is a realistic, if small, spam list: literal
+phrases, flexible whitespace
+.RB ( \es* ", " \es+ ),
+digits
+.RB ( \ed+ ),
+an escaped dollar sign
+.RB ( \e$ ),
+an optional group
+.RB ( (?:\e.\ed+)? " for a decimal part),"
+alternation between wordings
+.RB ( (?:a|b|c) ),
+and an anchored prefix
+.RB ( ^ ).
+Combining a handful of these covers most of the wording spammers
+vary between otherwise-identical messages.
+.SS Building a regex-file list from real mail
+A practical way to grow a list like the one above: collect the Subject
+lines of messages you already know are spam (from a quarantine folder,
+a training corpus, or your own mail_filter log), then generalize each
+one into a pattern instead of matching it literally verbatim \(em
+replace numbers with
+.BR \ed+ ,
+loosen spacing around punctuation to
+.B \es*
+or
+.BR \es+ ,
+and fold near-identical wordings into one
+.B (?:a|b|c)
+alternation rather than keeping several separate lines.
+.PP
+Before deploying a hand-edited or generated list, validate it against
+a corpus of real Subject lines \(em both the spam you built it from and
+some legitimate mail, so you can see false positives before your users
+do:
+.PP
+.nf
+.RS
+check_regex.py known_spam_subjects.txt spam_subjects.regex
+check_regex.py known_spam_subjects.txt spam_subjects.regex --show-found
+check_regex.py known_good_subjects.txt spam_subjects.regex --reverse
+.RE
+.fi
+.PP
+The first form reports lines from
+.I known_spam_subjects.txt
+that no regex in the file matches (candidates for a new pattern);
+.B --show-found
+additionally prints what did match, and with which regex, so you can
+spot a pattern that is broader than intended;
+.B --reverse
+inverts the logic, so running it against known-legitimate Subject
+lines reports any that a spam pattern would incorrectly catch. See
+.BR check_regex.py (1)
+for the full option list. The companion tool
+.BR generate_emoji_regex.py (1)
+builds the same kind of refile list for a narrower, mechanically
+generated case \(em Unicode emoji ranges \(em rather than free-text
+wording; see its own man page for that one's workflow.
+.SS A Python-regex gotcha coming from sed(1)/grep(1)
+mail_filter compiles every pattern \(em inline or from a regex file
+\(em with Python's
+.B re
+module, not POSIX regex. If you are used to writing
+.BR sed (1)
+or
+.BR grep (1)
+patterns, the POSIX bracket classes
+.RB ( [:alpha:] ", " [:digit:] ", " [:space:] ,
+and so on) do
+.B not
+work here: Python's
+.B re
+has no special meaning for them, so a rule written as
+.I subject /[[:digit:]]/
+will
+.B never
+match an actual digit \(em Python parses
+.I [[:digit:]]
+as an ordinary character class built from the literal characters
+.IR [ ,
+.IR : ,
+.IR d ,
+.IR i ,
+.IR g
+and
+.I t
+(closed by the first
+.IR ] ),
+followed by a stray literal
+.I ]
+in the pattern, and silently gives you that instead of an error.
+(Python itself is suspicious enough of this to print
+.I "FutureWarning: Possible nested set"
+when the pattern is compiled \(em but nothing stops it from loading
+into a rules file, where that warning is easy to miss.)
+Use the Perl-style
+equivalents instead, which Python's
+.B re
+does understand:
+.BR \ed " for [:digit:], " \ew " for [:alnum:] plus underscore, " \es
+for [:space:], and an explicit range like
+.BR [a-zA-Z]
+for [:alpha:]. All of these appear in the example list above.
+.SS Numeric comparisons
+Every test keyword documented above (including
+.BR body )
+also accepts a numeric comparison in place of a
+.I /pattern/flags
+or
+.I refile:
+source:
+.PP
+.nf
+.RS
+\fItest-keyword\fR [\(dqName\(dq] \fIop\fR \fInumber\fR
+.RE
+.fi
+.PP
+where
+.I op
+is one of
+.BR > ,
+.BR < ,
+.BR >= ,
+.BR <= ,
+.BR == ,
+or
+.BR != ,
+and
+.I number
+is an optionally-signed integer or decimal, e.g.
+.IR 15 ,
+.IR -3.2 ,
+.IR 1000 .
+This is primarily useful with
+.B header
+for testing a numeric header value such as a spam score, without having
+to hand-write a regex that separately covers every possible digit count:
+.PP
+.nf
+.RS
+if header "X-Spam-Score-Total" > 15 {
+    reject "Spam score too high";
+}
+.RE
+.fi
+.PP
+The milter parses a leading, optionally-signed number out of the
+field's value \(em ignoring anything that follows, so
+.I \(dq17.20 required=5.0 tests=...\(dq
+is read as
+.I 17.2
+\(em and compares it against
+.I number
+using
+.IR op .
+If the field's value does not begin with a number, the test is simply
+false; it never raises an error or aborts rule evaluation.
+.PP
+A numeric test correctly matches values of any magnitude, unlike a regex
+built for a specific digit count. For example
+.I "> 15"
+matches
+.IR 16 ,
+.IR 23.5 ,
+and
+.I 1000
+(the fixed score SpamAssassin's GTUBE test string produces) alike, with
+no risk of a pattern tuned for two-digit scores silently missing a
+three-or-more-digit one.
+.PP
+Numeric and regex tests combine freely with
+.BR and / or / not
+and with regex or numeric tests on other fields, including
+.BR body ,
+e.g.:
+.PP
+.nf
+.RS
+if header "X-Spam-Score-Total" > 15
+   and subject /invoice/i {
+    reject "High-scoring message impersonating an invoice";
+}
+.RE
+.fi
+.SH ACTIONS
+Actions appear inside
+.B { }
+blocks and must end with a semicolon.
+.TP
+.BI "reject " \(dqmessage\(dq ;
+Reject the message with a permanent 550\~5.7.1 SMTP error.
+The quoted message is sent to the client and written to the log.
+The message text may not contain a bare double-quote character.
+If the message is omitted a default text is used.
+.TP
+.B accept ;
+Accept the message immediately; no further rules are evaluated.
+Useful inside an
+.B else
+branch to explicitly pass a message that would otherwise fall
+through to a later REJECT rule.
+.TP
+.BI "warn " \(dqmessage\(dq ;
+Write a WARNING-level log entry and continue evaluating rules.
+The message is delivered normally.
+Useful for monitoring patterns before converting them to
+.BR reject .
+.TP
+.B dunno ;
+Continue evaluating the next rule without taking any action.
+Equivalent to a false condition; useful inside
+.B else
+branches as an explicit no-op.
+.SH BACKREFERENCES IN MESSAGES
+A
+.B reject
+or
+.B warn
+message may pull in the regex's own capture groups, like Postfix's
+.BR pcre_table (5):
+.PP
+.nf
+.RS
+if subject /name\es*=\es*"?([^;]*invoice[^;]*\e.(zip|rar))"?/i {
+    reject "$1 attachment";
+}
+.RE
+.fi
+.PP
+.B $1
+,
+.BR $2 ", etc." ,
+substitute the matched capture groups;
+.B $0
+is the whole match.
+.B $$
+produces a literal
+.BR $ .
+Write
+.B ${1}
+instead of
+.B $1
+when the number would otherwise run into following text (e.g.
+.BR id${1}9 ,
+not
+.BR id$19 ,
+which would mean group 19). A capture group that did not participate in
+the match substitutes as empty.
+.PP
+Since only one regex can unambiguously be "the" match, backreferences are
+only allowed directly inside a single regex-based condition
+.RI ( subject ,
+.IR body ,
+.IR envelope_from ,
+.IR envelope_to ,
+.IR from ,
+.IR to ,
+.IR cc ,
+.IR reply_to ,
+or
+.IR header ),
+or an
+.B anyof(...)
+of such conditions (the one that actually matched supplies the groups).
+.B allof(...)
+is rejected at load time \(em more than one condition could each
+contribute groups, and it is not obvious whose
+.B $1
+would win. A negated
+.B not(...)
+condition is rejected too, matching Postfix's own restriction
+(pcre_table(5): "substitutions are not available for negated patterns")
+\(em by definition it has no match to take groups from. A numeric
+comparison
+.RI ( "e.g. body_size > 100000" )
+is rejected as well; there is no regex to have groups. Using
+.B $2
+when the regex only has one capture group is rejected at load time too,
+naming the offending regex and its file:line.
+.SH RULE EVALUATION
+.IP 1. 4
+Rules are tested in the order they appear in the file.
+.IP 2.
+For each rule the
+.B if
+condition is evaluated against the current message context.
+.IP 3.
+If the condition is true, the body block is entered:
+.RS
+.IP \(bu 4
+.B reject
+\(em terminates evaluation; message is rejected.
+.IP \(bu
+.B accept
+\(em terminates evaluation; message is accepted.
+.IP \(bu
+.B warn
+\(em logs a warning; evaluation continues with the next top-level rule.
+.IP \(bu
+.B dunno
+\(em no action; evaluation continues with the next top-level rule.
+.RE
+.IP 4.
+If the condition is false the
+.BR else / "else if"
+chain is tested.
+If no branch matches, evaluation advances to the next top-level rule.
+.IP 5.
+If no rule produces
+.B reject
+or
+.BR accept ,
+the message is accepted silently.
+.SH EXAMPLES
+.SS Blocking a simple phrase in Subject
+.nf
+.RS
+if subject /YOU\es+PERVERT/i {
+    reject "Spam: Email blackmail rejected";
+}
+.RE
+.fi
+.SS Conditional routing by recipient (invoice routing), infix style
+Accept invoice-related messages only for designated mailboxes;
+reject all other recipients.
+.nf
+.RS
+if subject /invoice/i {
+    if rcpt_to /^<accounting@example\.com>$/i or rcpt_to /^<director@example\.com>$/i {
+        accept;
+    } else {
+        reject "Invoice: unauthorized recipient";
+    }
+}
+.RE
+.fi
+The same rule, written as a single condition with
+.BR and / not :
+.nf
+.RS
+if subject /invoice/i and not (
+    rcpt_to /^<accounting@example\.com>$/i or rcpt_to /^<director@example\.com>$/i
+) {
+    reject "Invoice: unauthorized recipient";
+}
+.RE
+.fi
+And the equivalent legacy
+.B allof
+/
+.B anyof
+/
+.B not
+form (all three forms are interchangeable):
+.nf
+.RS
+if allof(
+    subject /invoice/i,
+    not anyof(
+        rcpt_to /^<accounting@example\.com>$/i,
+        rcpt_to /^<director@example\.com>$/i
+    )
+) {
+    reject "Invoice: unauthorized recipient";
+}
+.RE
+.fi
+.SS Blocking Cyrillic subjects
+.nf
+.RS
+if subject /[Ѐ-ӿ]/ {
+    reject "Spam: Cyrillic subject rejected";
+}
+.RE
+.fi
+.SS Blocking emoji, with a sender exception (infix and/not)
+Reject messages whose Subject contains emoji, unless they come from
+a trusted transactional-mail domain.
+.nf
+.RS
+if subject /[\eU0001F300-\eU0001F9FF\eU0001F004-\eU0001F0CF\eU00002600-\eU000027BF]/
+   and not envelope_from /@notifications\.stripo\.email>?$/i {
+    reject "Emoji not allowed";
+}
+.RE
+.fi
+Note the
+.B >?
+before the anchor: the envelope address includes the closing angle
+bracket, so an anchored pattern must either allow for it or remain
+unanchored (see the
+.I envelope_from
+test description above).
+.SS Blocking CJK scripts
+.nf
+.RS
+if subject /[\eu3040-\eu30FF\eu4E00-\eu9FFF\eu3400-\eu4DBF\euF900-\euFAFF\euAC00-\euD7AF\eU00020000-\eU0002A6DF]/ {
+    reject "Spam: CJK script subject rejected";
+}
+.RE
+.fi
+.SS Combining envelope sender and arbitrary header (numeric threshold)
+Reject messages that appear to be spam (high X-Spam-Score) with a
+suspicious subject, but only from external senders. This assumes the
+header carries a plain numeric value \(em verify this against your own
+scanner's actual output before relying on it, since some spam scanners
+put a per-rule score breakdown under a similarly-named header instead
+of a single total (see
+.B "Numeric comparisons"
+above).
+.nf
+.RS
+if subject /pharmacy|pills|viagra/i
+   and not envelope_from /@example\.com>/i
+   and header "X-Spam-Score" > 15 {
+    reject "Spam: high score + suspicious subject";
+}
+.RE
+.fi
+This correctly rejects a score of
+.I 1000
+(e.g. SpamAssassin's GTUBE test string) just as readily as a score of
+.IR 16 .
+An older regex-based approach such as
+.I "header \(dqX-Spam-Score\(dq /^[89]\ed\./"
+only matches two-digit scores in the 80\-99 range \(em it silently
+misses both smaller two-digit scores above the threshold (e.g.
+.IR 16\-79 )
+and any three-or-more-digit score.
+.SS warn for monitoring before blocking
+.nf
+.RS
+if subject /invoice/i and envelope_from /@external\.example\.com>/i {
+    warn "External invoice -- monitoring";
+}
+.RE
+.fi
+.SS Verbose regex with comments (x flag)
+.nf
+.RS
+if subject /
+    (recipe|reduce|avoid(ing)?|prevent(ing)?)?
+    .*
+    knee
+    .*
+    (pain|surger(y|ies)|fail(ing)?)
+/ix {
+    reject "Knee spam";
+}
+.RE
+.fi
+.SS else if chain
+.nf
+.RS
+if envelope_from /newsletter@/i {
+    dunno;
+} else if subject /[Ѐ-ӿ]/ {
+    reject "Cyrillic subject";
+} else if subject /[\eu4E00-\eu9FFF]/ {
+    reject "CJK subject";
+}
+.RE
+.fi
+.SS Nested conditions with reply-to check
+.nf
+.RS
+if subject /unsubscribe|opt.out/i
+   and not (reply_to /@example\.com>/i or envelope_from /@example\.com>/i) {
+    warn "Suspicious unsubscribe from external sender";
+}
+.RE
+.fi
+.SS Operator-precedence pitfall
+Without parentheses,
+.B and
+binds tighter than
+.BR or ,
+so the following does
+.B NOT
+mean \(lqsubject matches X or Y, and the sender must always be
+external\(rq:
+.nf
+.RS
+\fR# WRONG \(em accidentally accepts internal senders when subject is X
+if subject /X/i or subject /Y/i and not envelope_from /@example\.com>/i {
+    reject;
+}
+.RE
+.fi
+The correct form groups the
+.B or
+explicitly:
+.nf
+.RS
+if (subject /X/i or subject /Y/i) and not envelope_from /@example\.com>/i {
+    reject;
+}
+.RE
+.fi
+.SS Blocking HTML-entity obfuscation in the body
+Spammers sometimes encode every character of the body as an HTML entity
+.RI ( &#65; " or " &#x41; " for " A )
+so that plain-text dictionary filters see nothing readable. Six or more
+entities within 100 characters is a strong obfuscation signal:
+.nf
+.RS
+if body /(?:&#(?:\ed{2,6}|x[0-9A-Fa-f]{2,5});.{0,100}){6,}/s {
+    reject "HTML entity obfuscation detected";
+}
+.RE
+.fi
+.SS Combining Subject and body in one rule (Business Email Compromise)
+This is the main scenario that motivated merging the Subject-only and
+body-only milters into
+.BR mail_filter :
+a single rule can now require an urgent-sounding Subject
+.B and
+a financial-fraud phrase in the body
+.B and
+an external sender, in one place:
+.nf
+.RS
+if subject /urgent|ASAP|confidential/i
+   and (body /wire\es+transfer|bank\es+transfer|IBAN|SWIFT/i
+        or body /send\es+funds|transfer\es+funds/i)
+   and not envelope_from /@yourcompany\.com>/i {
+    reject "Possible BEC -- financial request from external sender";
+}
+.RE
+.fi
+.SH TESTING
+Test a message context against the current rules without sending mail.
+By default the normal system configuration is used. To test an alternate
+configuration tree, use
+.BR --test-config .
+Relative
+.B rules
+and
+.B whitelist
+paths inside that configuration are resolved relative to the directory
+containing the alternate
+.B mail_filter.conf
+file; relative
+.B refile:
+paths are then resolved relative to the selected rules file.
+.PP
+Test switches are grouped into a Subject/envelope/header group
+.RB ( --subject ,
+.BR --envelope-from ,
+.BR --envelope-to ,
+.BR --from ,
+.BR --to ,
+.BR --header )
+and a body group
+.RB ( --body " / " --body-file ).
+Both groups can be combined freely in one
+.B --test
+invocation to exercise a rule that requires both a
+.B subject
+and a
+.B body
+condition, e.g.\& a Business-Email-Compromise style rule. Within the
+body group,
+.B --body
+and
+.B --body-file
+are mutually exclusive and cannot be given together.
+.PP
+.nf
+.RS
+# Quick subject test
+mail_filter --test --subject "Invoice 2024" \e
+    --envelope-from "<supplier@external-domain.com>" \e
+    --envelope-to "<accounting@example.com>"
+
+# Quick body test
+mail_filter --test --body "please wire the payment to our new IBAN"
+
+# Combined subject + body test (e.g. a BEC-style rule)
+mail_filter --test \e
+    --subject "Urgent payment request" \e
+    --body "Please process a wire transfer today" \e
+    --envelope-from "<ceo@external-domain.com>"
+
+# With From/To headers
+mail_filter --test \e
+    --subject "Invoice #42" \e
+    --envelope-from "<a@b.com>" \e
+    --envelope-to "<finance@example.com>" \e
+    --from "A B <a@b.com>" \e
+    --header "X-Spam-Score: 3.2"
+
+# Testing a numeric-comparison rule (see CONDITIONS / Numeric comparisons):
+# a rule with `header "X-Spam-Score-Total" > 15 { reject; }` fires on this
+mail_filter --test --header "X-Spam-Score-Total: 23.5"
+
+# ...but not on this (below the threshold)
+mail_filter --test --header "X-Spam-Score-Total: 3.2"
+
+# Body from a file
+mail_filter --test --body-file /tmp/suspect-body.txt
+
+# From a JSON context file (subject and body together)
+mail_filter --test --test-context /tmp/testmsg.json
+
+# Test a self-contained alternate configuration directory
+mail_filter --test --test-config /tmp/mail_filter-test/mail_filter.conf \e
+    --subject "Invoice 2024"
+
+# Test an entire EML file (subject, body and MIME parts are extracted
+# automatically; --subject/--body/--test-context are ignored if also given)
+mail_filter --test-eml /tmp/suspect-message.eml
+.RE
+.fi
+.PP
+The JSON file format used by
+.B --test-context
+carries both the Subject and body in a single context, together with the
+envelope and headers:
+.nf
+.RS
+{
+  "subject": "Invoice 2024",
+  "body": "Please wire the outstanding balance to our new account.",
+  "envelope_from": "<supplier@external-domain.com>",
+  "envelope_to": ["<accounting@example.com>", "<director@example.com>"],
+  "headers": {
+    "From": "Dodavatel <supplier@external-domain.com>",
+    "X-Spam-Score": "2.1"
+  }
+}
+.RE
+.fi
+.PP
+.B Conflicting test switches.
+.BR --configtest ,
+.BR --test-eml ,
+and
+.B --test-context
+each build their own, self-contained message context and take priority
+over any Subject/envelope/header or body switches given alongside them.
+When such a conflicting combination is detected, mail_filter prints a
+.B WARN
+line to standard error naming the switches that were ignored, then
+proceeds using the higher-priority option; it does not abort. Combining
+plain
+.BR --subject / --envelope-* / --from / --to / --header
+switches with plain
+.B --body / --body-file
+switches is
+.B not
+a conflict \(em that is the normal way to test a rule spanning both the
+Subject and the body.
+.PP
+Exit codes:
+.B 0
+= ACCEPT,
+.B 1
+= REJECT.
+.PP
+On a match, the tester also prints the exact chain of rule lines
+that led to the result (top-level
+.BR if ,
+any nested
+.BR if s,
+down to the terminating action), so you can see precisely which
+rule \(em and which branch of it \(em fired.
+.SH SEE ALSO
+.BR mail_filter (8),
+.BR mail_filter.conf (5),
+.BR mail_filter_whitelist.cidr (5)
+.SH AUTHORS
+Pavel Hlubík <phlubik@seznam.cz>
+.SH COPYRIGHT
+Copyright \(co Pavel Hlubík <phlubik@seznam.cz>.
+Free software provided \(lqas is\(rq without warranty of any kind.

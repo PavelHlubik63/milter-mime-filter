@@ -1,0 +1,6 @@
+mail-filter (1.0.0) unstable; urgency=medium
+
+  * Initial packaged release of mail_filter, the unified Subject and body
+    milter merged from the former subject_milter and body_milter.
+
+ -- Pavel Hlubík <phlubik@seznam.cz>  Wed, 02 Sep 2026 19:00:00 +0000

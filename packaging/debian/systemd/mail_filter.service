@@ -1,0 +1,29 @@
+[Unit]
+Description=Mail Filter - MIME-aware Subject and body filter for Postfix
+After=network.target
+
+[Service]
+Type=simple
+User=postfix
+Group=postfix
+
+# /run is tmpfs on Linux -- wiped on every boot -- so the socket directory
+# must be (re)created by systemd on every start, not once in postinst.
+RuntimeDirectory=mail_filter
+RuntimeDirectoryMode=0750
+
+# Prevent Python from writing .pyc files into /usr/lib/mail_filter/__pycache__/
+# (the postfix user has no write permission to that root-owned directory)
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+ExecStart=/usr/bin/python3 /usr/lib/mail_filter/mail_filter.py
+ExecReload=/bin/kill -USR1 $MAINPID
+
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

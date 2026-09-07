@@ -1,0 +1,13 @@
+#!/bin/sh
+if service mail_filter status > /dev/null 2>&1; then
+    echo "  Stopping mail_filter..."
+    service mail_filter stop
+fi
+
+# Defense in depth: PYTHONDONTWRITEBYTECODE=1 (set by rc.d) stops the daemon
+# itself from ever writing bytecode cache, but an admin running the script
+# directly (--test, --configtest) outside rc.d might not have that set.
+# pkg does not know about __pycache__/ (it was never in files{}), so it
+# would otherwise be left behind as a non-empty, unremovable directory.
+find /usr/local/lib/mail_filter/mail_filter -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
+true

@@ -1,0 +1,114 @@
+.TH CHECK_REGEX.PY 1 "2026" "mail_filter 1.0.0" "User Commands"
+.nh
+.SH NAME
+check_regex.py \- test a corpus of text lines against a mail_filter regex file
+.SH SYNOPSIS
+.B check_regex.py
+.RB [ -s | --show-found ]
+.RB [ -r | --reverse ]
+.I text_file
+.I regex_file
+.SH DESCRIPTION
+Reads
+.I text_file
+one line at a time and tests each line against every regex in
+.IR regex_file ,
+a file in the same
+.I /pattern/flags
+per-line format used by
+.B refile:
+(see
+.BR mail_filter_rules.conf (5),
+.B Regex files
+section). It does not run mail_filter itself and does not touch Subject
+decoding, MIME, or anything else milter-specific \(em it is a plain,
+fast way to try a refile list against a batch of sample lines before
+wiring it into a rule.
+.PP
+.I text_file
+may be
+.B -
+to read from standard input.
+.PP
+By default, prints every line of
+.I text_file
+that
+.B no
+regex in
+.I regex_file
+matched \(em i.e. spam your list would currently miss.
+.SH OPTIONS
+.TP
+.BR -s ", " --show-found
+Also print lines that
+.B did
+match, together with the specific regex (file and line number) that
+matched them. Without this, matched lines are silently counted, not
+shown.
+.TP
+.BR -r ", " --reverse
+Invert the pass/fail logic: report lines that
+.B did
+match as the problem cases instead of lines that didn't. Run against a
+corpus of known-legitimate Subject lines, this finds false positives \(em
+combine with
+.B --show-found
+to see which regex is too broad.
+.SH EXIT STATUS
+.TP
+.B 0
+Clean: in the default direction, every line of
+.I text_file
+matched some regex; with
+.BR --reverse ,
+no line matched any regex.
+.TP
+.B 1
+Not clean: in the default direction, at least one line of
+.I text_file
+matched nothing (a spam sample your list would currently miss); with
+.BR --reverse ,
+at least one line matched something it shouldn't have (a likely false
+positive). Suitable for a pre-deploy check in a script.
+.TP
+.B 2
+.I regex_file
+failed to parse, contained no regexes, or
+.I text_file
+could not be opened.
+.SH EXAMPLES
+Find spam Subject lines a list doesn't catch yet:
+.PP
+.nf
+.RS
+check_regex.py known_spam_subjects.txt spam_subjects.regex
+.RE
+.fi
+.PP
+Same, but also show what already matches, and which rule:
+.PP
+.nf
+.RS
+check_regex.py known_spam_subjects.txt spam_subjects.regex --show-found
+.RE
+.fi
+.PP
+Check a list doesn't accidentally catch legitimate mail:
+.PP
+.nf
+.RS
+check_regex.py known_good_subjects.txt spam_subjects.regex --reverse
+.RE
+.fi
+.SH FILES
+.TP
+.I /usr/local/libexec/mail_filter/check_regex.py\ \ (FreeBSD)
+.TQ
+.I /usr/lib/mail_filter/check_regex.py\ \ (Linux)
+Installed tool. Deliberately not on
+.IR $PATH ;
+run it with the full path shown above.
+.SH SEE ALSO
+.BR mail_filter (8),
+.BR mail_filter_rules.conf (5),
+.BR generate_emoji_regex.py (1)

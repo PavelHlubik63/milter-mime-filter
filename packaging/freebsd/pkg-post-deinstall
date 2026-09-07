@@ -1,0 +1,26 @@
+#!/bin/sh
+# Runs once, after pkg has removed every file it tracks. The real config
+# files (mail_filter.conf etc.) are never tracked -- they were created by
+# pkg-post-install as a copy of the .sample files -- so pkg leaves them and
+# the directory behind by design. Say so only if something is actually
+# still there.
+
+CONFDIR="/usr/local/etc/mail_filter"
+
+if [ -d "${CONFDIR}" ] && [ -n "$(find "${CONFDIR}" -mindepth 1 -print -quit)" ]; then
+    echo ""
+    echo "Note: ${CONFDIR} was not removed -- it still contains your configuration:"
+    find "${CONFDIR}" -mindepth 1 -exec echo "  {}" \;
+    echo "Remove it manually if you no longer need it."
+    echo ""
+fi
+
+# Bytecode left behind by a hand-run "mail_filter --configtest" from before
+# the wrapper set PYTHONDONTWRITEBYTECODE. pkg(8) never owned these files,
+# so without this the package's own directory survives its own removal.
+#
+# Only the untracked bytecode is removed here. This script runs before
+# pkg(8) prunes the directories it does own, so removing those as well
+# just makes pkg report unlinkat() failures for work already done.
+rm -rf /usr/local/lib/mail_filter/mail_filter/__pycache__
+rm -rf /usr/local/libexec/mail_filter/__pycache__
