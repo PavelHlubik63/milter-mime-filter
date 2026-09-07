@@ -1,0 +1,11 @@
+/var/log/mail_filter.log {
+    monthly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    # The WatchedFileHandler in Python detects rotation and reopens the file itself.
+    # postrotate / kill -HUP is not necessary.
+    create 640 postfix postfix
+}

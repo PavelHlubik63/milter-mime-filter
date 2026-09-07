@@ -1,0 +1,922 @@
+.TH MAIL_FILTER 8 "August 2026" "mail_filter 1.0.0" "System Administration"
+.SH NAME
+mail_filter \- MIME-aware Subject and body milter for Postfix
+.SH SYNOPSIS
+.B mail_filter
+.br
+.B mail_filter
+.B \-\-configtest
+.br
+.B mail_filter
+.B \-\-test
+.RI [ test-options ]
+.br
+.B mail_filter
+.B \-\-test\-eml
+.I message.eml
+.SH DESCRIPTION
+.B mail_filter
+is a Postfix milter daemon that accepts, rejects, or warns on incoming mail
+according to user-defined regular-expression rules. Rules can inspect the
+decoded Subject, the raw message body, SMTP envelope sender and recipients,
+and arbitrary message headers \(em in any combination, within a single rule.
+.PP
+.B mail_filter
+runs as a single process registering one Unix-domain socket with Postfix,
+and evaluates one rules file that can freely combine
+.B subject
+and
+.B body
+conditions in the same rule.
+.PP
+Before rules are evaluated, the Subject and message-header values are
+unfolded and decoded from RFC\ 2047 MIME encoded-words (both Q-encoding and
+Base64). This means regex patterns for Subject, From, To, Cc, Reply-To, and
+arbitrary header tests are matched against human-readable Unicode text rather
+than the raw encoded wire representation. SMTP envelope addresses are not MIME
+headers and are therefore used unchanged. The message body is matched as raw
+UTF-8 text (not MIME- or HTML-decoded); see
+.B Body Handling
+below.
+.PP
+Connecting clients whose IP addresses are listed in the whitelist file
+bypass rule evaluation entirely; their messages are always accepted.
+.PP
+The milter communicates with Postfix over a Unix domain socket and,
+when a matching REJECT rule is found, replies with a permanent
+550\ 5.7.1 failure code so the sending server receives a definitive
+rejection rather than a bounce.
+.SH OPERATION
+.SS MIME Decoding
+Subject and message-header values delivered as encoded-words are decoded before matching.
+Both
+.I Q-encoding
+.RI ( =?UTF-8?Q?...?= )
+and
+.I Base64-encoding
+.RI ( =?UTF-8?B?...?= )
+are handled for any charset advertised in the encoded-word.
+If a charset is unknown the bytes are decoded as Latin-1 with
+replacement characters for unmappable sequences.
+If the header contains no encoded-words it is used as-is.
+.PP
+The Subject retains its historical raw and decoded logging fields. Common
+address headers are logged in decoded, unfolded form; the optional structured
+mail log also provides explicit raw variants for From, To, Cc, and Reply-To.
+.SS Application Log Timestamps
+The timestamp written to the ordinary mail_filter application log is
+controlled by the
+.B log_timestamp
+setting in
+.BR mail_filter.conf (5).
+The default is
+.B bsd
+on FreeBSD and
+.B iso8601
+on Linux/Debian, matching each platform's native syslog convention.
+.B bsd
+is the historical format, for example
+.I Aug 28 18:50:23 .
+.B iso8601
+is an offset-aware local timestamp with microsecond precision, for
+example
+.IR 2026-08-28T18:50:23.652662+00:00 .
+Any other value is used as a format string for Python's
+.IR time.strftime() ,
+letting an administrator match a house log style; see
+.BR mail_filter.conf (5)
+for the full set of caveats (notably that
+.I %f
+is not supported).
+.PP
+This setting applies only to the file written directly by mail_filter,
+typically
+.IR /var/log/mail_filter.log .
+It is independent of the optional structured
+.B [mail_log]
+output. The latter is sent through syslog(3), so its timestamp format is
+determined by the host's syslog implementation. mail_filter deliberately
+does not try to detect or duplicate rsyslog, syslog-ng, or syslogd timestamp
+templates automatically.
+.SS Rule Evaluation
+Rules are read from the rules file and evaluated in order.
+Conditions may test the decoded Subject, the raw message body, envelope
+addresses, and decoded, unfolded message headers, combined with
+.BR and , " " or ", and " not
+(or the legacy
+.BR anyof / allof / not
+function forms). Each regex test may use an inline
+.I /regex/flags
+literal or a
+.B refile:
+reference to a file of regex literals.
+Evaluation stops at a terminal
+.B reject
+or
+.B accept
+action;
+.B warn
+and
+.B dunno
+allow evaluation to continue. If no terminal rule matches, the message
+is accepted.
+See
+.BR mail_filter_rules.conf (5)
+for the full rule syntax, including the
+.B body
+test.
+.SS Body Handling
+The milter accumulates the message body as it streams in, up to the
+.B max_body_kb
+limit configured in
+.BR mail_filter.conf (5)
+(default: 512\ KB). Body data received beyond that limit is discarded;
+.B body
+rules still run against the retained (truncated) prefix, and the
+.B body_truncated
+mail-log field records whether truncation occurred.
+.PP
+The retained body is decoded as UTF-8 (with replacement characters for
+invalid sequences) but is otherwise used as-is: it is
+.B not
+stripped of HTML tags, not MIME-decoded part-by-part, and not
+otherwise normalized, except for one transformation \(em quoted-printable
+soft line breaks
+.RI ( "=\en" " or " "=\er\en" )
+are merged first, so that a pattern such as an HTML entity artificially
+split across a QP line boundary
+.RI ( "&#22=\er\en5;" )
+is rejoined
+.RI ( "&#225;" )
+before matching. This specifically targets a common spam-obfuscation
+technique of encoding body text as HTML entities and injecting soft
+line breaks to defeat naive pattern matching; see the
+.B entity_count
+mail-log field and
+.BR mail_filter_rules.conf (5)
+for a ready-made detection rule.
+.PP
+When the message has no body at all (or the milter cannot decode it),
+.B body
+tests simply see an empty string and no
+.B body
+rule matches \(em rules that test only
+.BR subject ,
+.BR envelope_from ,
+or other non-body conditions are still evaluated normally.
+.SS Whitelisting
+When a connecting client's IP address matches an entry in the whitelist
+the milter accepts the message without evaluating any rules \(em this
+applies to
+.B all
+rules, whether they test the Subject, the body, or both.
+The ACCEPT decision is logged at INFO level together with the SMTP envelope
+addresses, the available From:, To:, X-Original-To:, and Delivered-To:
+header values, and the retained body size and entity count, which allows
+the whitelist to serve as a passive audit trail for trusted senders.
+See
+.BR mail_filter_whitelist.cidr (5)
+for the file format.
+.SS Configuration file paths
+The file-valued settings
+.BR rules ,
+.B whitelist
+and
+.B logfile
+may be written as absolute paths or as paths relative to the directory
+containing
+.BR mail_filter.conf .
+For example, when the rules file is stored beside the configuration file,
+.PP
+.nf
+.RS
+rules = mail_filter_rules.conf
+.RE
+.fi
+.PP
+is sufficient; a full path is not required. Likewise, relative
+.B refile:
+paths in the rules file are resolved relative to the rules file's directory.
+This makes a complete alternate configuration tree portable as a directory.
+.SH OPTIONS
+.TP
+.B \-\-configtest
+Validate the configuration, rules, and whitelist files, then exit.
+A structured report is written to standard output.
+Exit status is 0 if all checks pass, or a positive integer equal to
+the number of errors found.
+This option is equivalent to
+.B service mail_filter configtest
+on FreeBSD or
+.B mail_filter \-\-configtest
+run manually on Linux.
+If any
+.B \-\-test*
+or Subject/body test switch (below) is also given,
+.B \-\-configtest
+still runs alone; a
+.B WARN
+line is printed to standard error naming the ignored switches.
+.TP
+.B \-\-test
+Test a supplied message context against the currently configured rules.
+The matched rule path is printed. For every positive regex match the output
+shows the exact regex literal; a
+.B refile:
+match additionally shows the referenced file and line number.
+Exit status is 0 for ACCEPT and 1 for REJECT.
+.TP
+.BI \-\-test\-config " file"
+Use an alternative
+.B mail_filter.conf
+(and the rules/whitelist it references) for
+.BR \-\-test ", " \-\-test\-eml ", and " \-\-configtest .
+.TP
+.BI \-\-test\-eml " file"
+Test a complete RFC\ 2822/mbox message file: the Subject, From, To, Date,
+and body are extracted automatically (QP soft-breaks merged, MIME parts
+listed), and the rules are evaluated against them.
+Exit status is 0 for ACCEPT and 1 for REJECT.
+If
+.BR \-\-test\-context ,
+.BR \-\-subject ,
+.BR \-\-body ,
+or any other Subject/body test switch below is also given, a
+.B WARN
+is printed to standard error and those switches are ignored \(em
+.B \-\-test\-eml
+always builds its own context from the EML file.
+.TP
+.BI \-\-test\-context " file"
+Read the full test message context \(em Subject, body, envelope, and
+headers together \(em from a JSON file; see
+.BR mail_filter_rules.conf (5)
+for the JSON schema.
+If any Subject/envelope/header or body switch below is also given
+alongside
+.BR \-\-test\-context ,
+a
+.B WARN
+is printed to standard error and those switches are ignored;
+.B \-\-test\-context
+takes precedence.
+.PP
+The remaining test switches are split into two groups that are meant to
+be
+.B combined
+in a single
+.B \-\-test
+invocation \(em this is how a rule that requires both a Subject
+.I and
+a body condition (e.g. a Business-Email-Compromise style rule) is
+exercised from the command line. They are documentation groups, not a
+restriction: unlike
+.BR \-\-configtest / \-\-test\-eml / \-\-test\-context " above, mixing "
+Subject-side and body-side switches is the normal, supported case and
+produces no warning.
+.SS Subject / envelope / header test options
+.TP
+.BI \-\-subject " subject-string"
+Set the raw Subject header. RFC 2047 encoded-words are decoded before rule
+evaluation.
+.TP
+.BI \-\-envelope\-from " address"
+Set the SMTP MAIL FROM value.
+.TP
+.BI \-\-envelope\-to " address"
+Add an SMTP RCPT TO value. This option may be specified more than once.
+.TP
+.BI \-\-from " value"
+Set a From: header value. It is unfolded and RFC 2047 decoded before matching.
+.TP
+.BI \-\-to " value"
+Set a To: header value. It is unfolded and RFC 2047 decoded before matching.
+.TP
+.BI \-\-header " Name:Value"
+Add an arbitrary message header. This option may be specified more than once. Header values are unfolded and RFC 2047 decoded before matching.
+.SS Body test options
+.TP
+.BI \-\-body " text"
+Set the message body directly from the command line.
+Mutually exclusive with
+.BR \-\-body\-file ;
+giving both is a hard argument-parsing error, not a warning.
+.TP
+.BI \-\-body\-file " file"
+Read the message body from a file.
+Mutually exclusive with
+.BR \-\-body ,
+as above.
+.PP
+Examples:
+.PP
+.nf
+.RS
+# Subject-only test
+mail_filter \-\-test \-\-subject 'urgent payment' \-\-envelope\-from '<sender@example.com>' \-\-header 'X-Spam-Status: Yes'
+
+# Body-only test
+mail_filter \-\-test \-\-body 'please wire the funds to our new account'
+
+# Combined Subject + body test (e.g. a BEC-style rule)
+mail_filter \-\-test \-\-subject 'urgent payment' \-\-body 'please wire the funds' \-\-envelope\-from '<ceo@external.example.com>'
+
+# Whole message file
+mail_filter \-\-test\-eml /tmp/suspect-message.eml
+.RE
+.fi
+.SH POSTFIX INTEGRATION
+Add the socket path to
+.IR /etc/postfix/main.cf
+(Linux) or
+.IR /usr/local/etc/postfix/main.cf
+(FreeBSD):
+.PP
+.nf
+.RS
+smtpd_milters        = unix:private/mail_filter.sock
+non_smtpd_milters    = unix:private/mail_filter.sock
+milter_default_action = accept
+milter_protocol       = 6
+.RE
+.fi
+.PP
+The path in
+.B smtpd_milters
+is interpreted relative to the Postfix queue directory.
+On Linux Postfix typically runs inside a chroot at
+.IR /var/spool/postfix ,
+so the socket must reside under that directory tree.
+The default installation places it at
+.IR /var/spool/postfix/private/mail_filter.sock ,
+which is referenced as
+.IR unix:private/mail_filter.sock .
+.PP
+On FreeBSD Postfix does not chroot by default.
+The socket is at
+.I /var/run/mail_filter/mail_filter.sock
+and must be referenced using a full absolute path:
+.PP
+.nf
+.RS
+smtpd_milters = unix:/var/run/mail_filter/mail_filter.sock
+.RE
+.fi
+.PP
+If multiple milters are already configured, append the socket path to
+the existing value with a space or comma separator.
+After modifying
+.I main.cf
+reload Postfix:
+.PP
+.nf
+.RS
+# FreeBSD
+service postfix reload
+# Linux
+postfix reload
+.RE
+.fi
+.PP
+The
+.B milter_default_action = accept
+setting ensures that mail is delivered normally if the milter is
+temporarily unavailable.
+Change to
+.B tempfail
+if you prefer mail to be deferred when the milter cannot be reached.
+.SH SIGNALS
+.TP
+.B SIGUSR1
+Reload the rules file and whitelist file.
+In-flight connections are not interrupted; the new configuration takes
+effect for all subsequent connections.
+This is the standard way to deploy rule changes without a service
+restart.
+On FreeBSD:
+.BR "service mail_filter reload" .
+On Linux:
+.BR "systemctl reload mail_filter" .
+.TP
+.BR SIGTERM ", " SIGINT
+Graceful shutdown.
+A final log message is written and the process exits immediately via
+.IR _exit (2),
+terminating all milter threads.
+The Unix socket file is cleaned up by the rc.d stop handler (FreeBSD)
+or the systemd unit (Linux) after the process exits.
+.TP
+.B SIGHUP
+.B Do not send SIGHUP to the milter.
+The underlying
+.I libmilter
+C library intercepts SIGHUP at the C level and terminates the process
+without invoking the Python signal handler.
+Use
+.B SIGUSR1
+to reload configuration, not SIGHUP.
+.SH FREEBSD RC.D INTEGRATION
+The rc.d script
+.I /usr/local/etc/rc.d/mail_filter
+provides the following commands:
+.TP 24
+.B start
+Start the milter via
+.IR daemon (8).
+The socket directory is created or repaired, any stale socket file is
+removed, and the log file is created if absent.
+After forking,
+.BR daemon (8)
+writes the PID of the Python process to
+.IR /var/run/mail_filter/mail_filter.pid .
+The start command waits up to five seconds and verifies that the
+process is still alive.
+.TP
+.B stop
+Send
+.B SIGTERM
+and remove the socket file.
+.TP
+.B restart
+Stop, then start.
+.TP
+.B reload
+Send
+.B SIGUSR1
+to reload rules and whitelist without a restart.
+.TP
+.B configtest
+Run a comprehensive sanity check: verify the Python binary, check the
+script for syntax errors, and validate every rule and whitelist entry.
+Exits 0 on success.
+.PP
+To enable at boot add to
+.IR /etc/rc.conf :
+.PP
+.nf
+.RS
+mail_filter_enable="YES"
+.RE
+.fi
+.PP
+The rc.d script honours the following
+.I rc.conf
+variables (defaults shown):
+.TP 36
+.B mail_filter_runas=postfix
+User account under which the Python process runs.
+.TP
+.B mail_filter_runas_group=postfix
+Group for the Python process.
+.TP
+.B mail_filter_sockdir=/var/run/mail_filter
+Directory that holds the Unix socket and PID file.
+.TP
+.B mail_filter_python=/usr/local/bin/python3
+Full path to the Python 3 interpreter.
+Change this if a different Python version is installed.
+.TP
+.B mail_filter_script=/usr/local/lib/mail_filter/mail_filter.py
+Full path to the milter script. Not
+.IR /usr/local/sbin/mail_filter ;
+that is the thin wrapper admins run interactively, not the real
+implementation rc.d execs directly (see FILES below).
+.TP
+.B mail_filter_config=/usr/local/etc/mail_filter/mail_filter.conf
+Full path to the main configuration file.
+.SH LINUX SYSTEMD INTEGRATION
+The systemd unit
+.I /usr/lib/systemd/system/mail_filter.service
+runs the milter as user and group
+.IR postfix .
+Before the process starts, systemd compiles the Python script to
+detect syntax errors (ExecStartPre).
+If the milter exits unexpectedly it is automatically restarted after
+five seconds (Restart=on-failure).
+.PP
+Common management commands:
+.PP
+.nf
+.RS
+systemctl start   mail_filter
+systemctl stop    mail_filter
+systemctl restart mail_filter
+systemctl reload  mail_filter   # sends SIGUSR1, reloads rules
+systemctl status  mail_filter
+journalctl \-u mail_filter \-f  # follow journal
+.RE
+.fi
+.PP
+.B Note:
+The milter writes to its own log file (see
+.B FILES
+below) rather than the journal, so
+.BR journalctl (1)
+only shows startup and shutdown messages emitted directly by systemd.
+.SH LOGGING
+Log output goes to the file configured by the
+.I logfile
+key in
+.BR mail_filter.conf (5)
+(default:
+.IR /var/log/mail_filter.log ).
+Each final message decision is written as one physical audit-log line:
+.PP
+.nf
+.RS
+Mon DD HH:MM:SS mail_filter[PID] LEVEL [ID] field=value ...
+.RE
+.fi
+.PP
+The line contains the envelope addresses, relevant message headers, raw and
+decoded Subject, final result, and matching-rule details when applicable.
+Embedded newlines and other unusual characters in logged values are escaped
+by Python representation formatting, so they do not split the audit record.
+When DEBUG logging is enabled, protocol-level diagnostic messages such as
+CONNECT, MAIL FROM, RCPT TO, and individual headers are intentionally emitted
+as additional lines; the final message decision remains a single line.
+.PP
+.I ID
+is a per-connection integer.
+Common fields:
+.TP 16
+.B qid
+Postfix queue ID.
+.TP
+.B msgid
+Value of the Message-ID header.
+.TP
+.B ip
+Client IP address.
+.TP
+.B envelope_from
+SMTP envelope sender (MAIL FROM). This is distinct from the message's
+From: header.
+.TP
+.B envelope_to
+SMTP envelope recipients (RCPT TO), comma-separated.
+.TP
+.B header_from
+Value of the message From: header, or a dash if the header is absent.
+.TP
+.B header_to
+Value of the message To: header, or a dash if the header is absent.
+.TP
+.B x_original_to
+Value of the X-Original-To: header, or a dash if the header is absent.
+This is logged separately because some delivered messages do not contain
+a To: header.
+.TP
+.B delivered_to
+Value of the Delivered-To: header, or a dash if the header is absent.
+Multiple occurrences of any logged address header are separated by
+`` | ``.
+.TP
+.B subject_raw
+Verbatim Subject header value.
+.TP
+.B subject_decoded
+Subject after MIME encoded-word decoding.
+.TP
+.B decode_error
+Subject decoding error text, or a dash when decoding succeeded.
+.TP
+.B body_size
+Number of bytes of message body retained for filtering, after any
+.B max_body_kb
+truncation.
+.TP
+.B body_truncated
+.B yes
+if the body was cut off at the configured
+.B max_body_kb
+limit,
+.B no
+otherwise.
+.TP
+.B entity_count
+Count of HTML-entity-style sequences found in the retained body after
+QP soft-break merging. See
+.B Body Handling
+above.
+.TP
+.B result
+Final message decision, normally ACCEPT or REJECT.
+.TP
+.B reason
+Reason for an ACCEPT result when applicable, for example no_rule_matched, rule,
+whitelisted, or fallthrough.
+.TP
+.B warn
+Triggered warning message or messages, or a dash. Multiple warnings are joined
+with `` | ``.
+.TP
+.B warn_rules
+Rule-path and regex-match details associated with warnings, or a dash.
+.TP
+.B rule_line
+Line-number path through the matching rule and any nested rules, ending
+at the action line.
+.TP
+.B matched
+Semicolon-separated regex match details. Inline regexes identify the rules
+file and line. A
+.B refile:
+match identifies the referenced regex file, its line number, and the exact
+.I /pattern/flags
+literal. A dash means the successful path contained no positive regex
+match, for example a true negated condition or an else branch.
+.PP
+Log levels:
+.TP 12
+.B DEBUG
+Every connection, every header, every rule comparison, all internal
+state transitions.
+Produces high log volume; use only for troubleshooting.
+.TP
+.B INFO
+Every accepted and rejected message with full context (IP, addresses,
+both Subject forms, body size, entity count).
+Suitable for production audit logging.
+.TP
+.B WARNING
+Rejected messages, WARN rule hits, reload events, and startup/shutdown
+notices.
+Suitable when disk space or log volume is a concern.
+.TP
+.B ERROR
+Serious errors only (files not found, socket directory problems).
+.PP
+The log level can be changed in
+.BR mail_filter.conf (5)
+and takes effect after a service restart.
+Changing it does not require reloading the rules.
+.PP
+On FreeBSD log rotation is configured by
+.IR /etc/newsyslog.conf.d/mail_filter.conf .
+On Linux log rotation is configured by
+.IR /etc/logrotate.d/mail_filter .
+The milter uses a
+.I WatchedFileHandler
+that detects log rotation automatically and reopens the file without
+requiring a signal or restart.
+.SH STRUCTURED MAIL LOG
+mail_filter can emit one configurable message record through
+.BR syslog (3)
+using the
+.B mail
+facility. The feature is configured in the
+.B [mail_log]
+section of
+.BR mail_filter.conf (5)
+and is disabled by default.
+.PP
+This output is separate from
+.IR /var/log/mail_filter.log .
+Its purpose is to place selected metadata already decoded by mail_filter
+next to the normal Postfix records in the system mail log. No second milter is
+required.
+.PP
+A typical backup-MX configuration is:
+.PP
+.nf
+.RS
+[mail_log]
+enabled  = yes
+priority = warning
+tag      = postfix/mail_filter
+format   = {qid}:\\theader Subject: '{subject_decoded}'\\teFrom: '{envelope_from}'\\thFrom: '{header_from}'\\tbody_size={body_size_bytes}\\tentity_count={entity_count}
+.RE
+.fi
+.PP
+On Ubuntu this normally produces records in
+.IR /var/log/mail.log .
+On FreeBSD the normal destination is
+.IR /var/log/maillog .
+Local syslog configuration ultimately determines the destination.
+.PP
+The template can use queue ID, Message-ID, client IP, envelope addresses,
+selected address headers, raw and decoded Subject, decoding status, final
+milter result, warning information, and matching-rule details. See
+.BR mail_filter.conf (5)
+for the complete field list and escaping rules.
+.PP
+.B --configtest
+validates every field reference before the service is started.
+
+
+.SH CONTENT-FILTER REINJECTION AND MULTIPLE RECORDS
+The structured
+.B [mail_log]
+output is emitted once for every completed mail_filter transaction. If
+Postfix passes a message through an external content filter and the filter
+reinserts the message into Postfix, the same logical message can pass through
+mail_filter twice.
+.PP
+A common SpamAssassin configuration is:
+.PP
+.nf
+.RS
+smtp      inet  n       -       y       -       -       smtpd
+  -o content_filter=spamassassin
+
+spamassassin unix -     n       n       -       -       pipe
+  user=debian-spamd argv=/usr/bin/spamc -f -e
+  /usr/sbin/sendmail -oi -f ${sender} ${recipient}
+.RE
+.fi
+.PP
+The SMTP pass receives the original message and has one Postfix queue ID.
+.B spamc
+then returns the filtered message through the local
+.B sendmail
+interface. Postfix accepts that returned message as a new queue entry, assigns
+a new queue ID, and invokes the milter again. The result is two mail_filter
+mail-log records, usually with the same Message-ID but different queue IDs.
+This is an expected property of the Postfix content-filter/reinjection design,
+not a mail_filter logging defect.
+.PP
+The two passes can also differ in envelope formatting or headers because the
+second pass is a new Postfix submission. mail_filter deliberately logs the
+values observed in each individual transaction.
+.PP
+On Ubuntu, if TAB separators configured with
+.B \\t
+appear as
+.B #011
+in
+.IR /var/log/mail.log ,
+see
+.BR mail_filter.conf (5)
+for the required rsyslog setting
+.BR global(parser.escapeControlCharacterTab="off") .
+
+.SH TROUBLESHOOTING
+.TP
+.B Milter not reachable \(em mail deferred or accepted without filtering
+Verify the socket path.
+On Linux, confirm the socket is inside the Postfix queue directory
+and that it exists:
+.nf
+.RS
+
+ls \-la /var/spool/postfix/private/mail_filter.sock
+.RE
+.fi
+On FreeBSD:
+.nf
+.RS
+
+ls \-la /var/run/mail_filter/mail_filter.sock
+.RE
+.fi
+If the socket is missing, check whether the milter is running and
+review the log file.
+.TP
+.B Rule not matching an expected subject
+Use
+.B \-\-test
+to decode the Subject and trace rule evaluation:
+.nf
+.RS
+
+mail_filter \-\-test \-\-subject 'the subject line here'
+.RE
+.fi
+Pass the raw wire form of the Subject header (with
+.I =?...?=
+encoded-words) to test encoding-sensitive patterns.
+.TP
+.B Rule not matching an expected body pattern
+Use
+.B \-\-test
+with
+.B \-\-body
+(or
+.BR \-\-body\-file / \-\-test\-eml )
+to trace body rule evaluation, and check the printed
+.B body_preview
+and
+.B entity_count
+to confirm the milter received and decoded the body you expect:
+.nf
+.RS
+
+mail_filter \-\-test \-\-body 'the body text here'
+.RE
+.fi
+If the body is longer than the configured
+.BR max_body_kb ,
+only the retained (truncated) prefix is available to rules; increase
+.B max_body_kb
+in
+.BR mail_filter.conf (5)
+if legitimate matches are being missed near the end of long messages.
+.TP
+.B Regex compilation error at startup
+Run
+.B \-\-configtest
+to identify the offending line number in the rules file.
+.SH FILES
+.TP
+.I /usr/local/sbin/mail_filter\ \ (FreeBSD)
+.TQ
+.I /usr/sbin/mail_filter\ \ (Linux)
+The milter command admins actually run. On both platforms this is a
+thin wrapper; the real implementation lives in
+.IR /usr/local/lib/mail_filter/ " (FreeBSD) or " /usr/lib/mail_filter/ " (Linux)."
+FreeBSD keeps this under
+.I /usr/local
+because that is pkg(8)'s own native prefix
+.RI ( hier (7):
+.I /usr/local/lib
+is for "local libraries",
+.I /usr/local/sbin
+for "local administration utilities" \(em the launcher is a utility,
+its importable
+.B mail_filter
+package next to it is a library, not itself a utility; real precedent
+for the same split already on this machine: dovecot ships under
+.IR /usr/local/lib/dovecot/ ,
+not
+.IR /usr/local/sbin/ ).
+Linux keeps it entirely outside
+.I /usr/local
+instead (Debian Policy 9.1.1 reserves that hierarchy for the system
+administrator's own installs, not package-owned files), landing at
+.I /usr/lib/mail_filter/
+to match how Postfix itself ships its own internal daemons on Debian
+.RI ( /usr/lib/postfix/sbin/ ) .
+.TP
+.I /usr/local/etc/mail_filter/mail_filter.conf\ \ (FreeBSD)
+.TQ
+.I /etc/mail_filter/mail_filter.conf\ \ (Linux)
+Main configuration file, alongside
+.B mail_filter_rules.conf
+and
+.BR mail_filter_whitelist.cidr .
+On Linux, the whole
+.I /etc/mail_filter
+directory (these files are never dpkg conffiles, see
+.BR mail_filter.conf (5))
+is deleted by
+.B apt purge
+but left untouched by
+.BR "apt remove" .
+.TP
+.I /usr/local/etc/mail_filter/mail_filter_rules.conf\ \ (FreeBSD)
+.TQ
+.I /etc/mail_filter/mail_filter_rules.conf\ \ (Linux)
+Filter rules.
+.TP
+.I /usr/local/etc/mail_filter/mail_filter_whitelist.cidr\ \ (FreeBSD)
+.TQ
+.I /etc/mail_filter/mail_filter_whitelist.cidr\ \ (Linux)
+IP/CIDR whitelist.
+.TP
+.I /var/run/mail_filter/mail_filter.sock\ \ (FreeBSD)
+.TQ
+.I /var/spool/postfix/private/mail_filter.sock\ \ (Linux)
+Unix domain socket.
+.TP
+.I /var/run/mail_filter/mail_filter.pid\ \ (FreeBSD)
+PID file written by
+.IR daemon (8).
+.TP
+.I /var/log/mail_filter.log
+Log file, plus any rotated
+.I mail_filter.log.*
+siblings (see below). On Linux, deleted by
+.B apt purge
+but left untouched by
+.BR "apt remove" .
+.TP
+.I /usr/local/etc/rc.d/mail_filter\ \ (FreeBSD)
+rc.d service script.
+.TP
+.I /usr/lib/systemd/system/mail_filter.service\ \ (Linux)
+systemd unit file.
+.TP
+.I /etc/newsyslog.conf.d/mail_filter.conf\ \ (FreeBSD)
+newsyslog log rotation configuration.
+.TP
+.I /etc/logrotate.d/mail_filter\ \ (Linux)
+logrotate log rotation configuration.
+.SH SEE ALSO
+.BR mail_filter.conf (5),
+.BR mail_filter_rules.conf (5),
+.BR mail_filter_whitelist.cidr (5),
+.BR check_regex.py (1),
+.BR generate_emoji_regex.py (1),
+.BR postconf (5),
+.BR postfix (1),
+.BR daemon (8)\ (FreeBSD)
+.SH AUTHORS
+Pavel Hlubík <phlubik@seznam.cz>
+.SH COPYRIGHT
+Copyright \(co Pavel Hlubík <phlubik@seznam.cz>
+.PP
+Free software, provided \(lqas is\(rq without any warranty of any kind.
+The author accepts no liability for any damage or data loss
+arising from the use of this software.
+Use at your own risk.

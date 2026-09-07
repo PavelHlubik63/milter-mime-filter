@@ -1,0 +1,27 @@
+#!/bin/bash
+set -e
+
+# Only "purge" removes admin data; a plain "remove" leaves it in place so
+# reinstalling keeps the existing configuration, matching Debian convention.
+# The real mail_filter.conf/rules/whitelist/emoji_regex.inc files are never
+# part of dpkg's own file list (postinst creates them from .dpkg-dist copies,
+# see packaging/debian/postinst) -- dpkg has no idea they exist and cannot
+# remove them on its own, hence doing it here explicitly.
+if [ "$1" = "purge" ]; then
+    rm -rf /etc/mail_filter
+    rm -f /var/log/mail_filter.log /var/log/mail_filter.log.*
+fi
+
+# Bytecode left behind by a hand-run "mail_filter --configtest" from before
+# the wrapper set PYTHONDONTWRITEBYTECODE. dpkg never owned these files, so
+# without this the package's own directory survives its own removal.
+# Guarded on remove/purge: on an upgrade the old package's postrm also runs,
+# and the new files are already in place by then.
+case "$1" in
+    remove|purge)
+        rm -rf /usr/lib/mail_filter/mail_filter/__pycache__
+        rm -rf /usr/lib/mail_filter/__pycache__
+        rmdir /usr/lib/mail_filter/mail_filter /usr/lib/mail_filter \
+            2>/dev/null || true
+        ;;
+esac

@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Deliberately no actions/setup-python here: it installs its own,
+      # isolated Python, separate from the one apt installs python3-milter
+      # into -- exactly the split-interpreter trap this project's FreeBSD
+      # packaging spent a lot of effort avoiding. Use the system python3
+      # ubuntu-latest already ships, matching a real Debian/Ubuntu install.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-milter python3-pytest
+
+      - name: Byte-compile the package
+        run: python3 -m py_compile src/mail_filter.py src/mail_filter/*.py src/libexec/*.py
+
+      - name: Run tests
+        run: python3 -m pytest -v
+        env:
+          PYTHONPATH: src
+
+      - name: Validate the sample configuration
+        run: python3 src/mail_filter.py --configtest conf/mail_filter.conf

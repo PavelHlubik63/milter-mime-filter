@@ -1,0 +1,13 @@
+Package: mail-filter
+Version: @VERSION@
+Section: mail
+Priority: optional
+Architecture: all
+Maintainer: Pavel Hlubík <phlubik@seznam.cz>
+Installed-Size: @INSTALLED_SIZE@
+Depends: python3 (>= 3.8), python3-milter
+Description: MIME-aware Subject and body filter for Postfix
+ Postfix milter that filters mail by Subject header and message body
+ using regex rules. Supports MIME encoded-words decoding, IP/CIDR
+ whitelist, external regex include files, structured mail-facility
+ syslog output and live rule reload.

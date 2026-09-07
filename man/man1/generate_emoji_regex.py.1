@@ -1,0 +1,189 @@
+.TH GENERATE_EMOJI_REGEX.PY 1 "September 2026" "mail_filter 1.0.0" "User Commands"
+.nh
+.SH NAME
+generate_emoji_regex.py \- generate emoji regular expressions for mail_filter
+.SH SYNOPSIS
+.B generate_emoji_regex.py
+.BI --download " VERSION"
+.RB [ --download-dir " DIR" ]
+.RB [ -o " FILE" ]
+.br
+.B generate_emoji_regex.py
+.BI --emoji-data " FILE"
+.BI --variation-data " FILE"
+.RB [ -o " FILE" ]
+.SH DESCRIPTION
+Generates an
+.I emoji_regex.inc
+suitable for a
+.B refile:
+rule in
+.BR mail_filter_rules.conf (5),
+from the Unicode Consortium's own emoji data files.
+.PP
+The result matches code points whose
+.B Emoji_Presentation
+property is Yes directly; text\-default symbols that are only emoji when
+followed by U+FE0F are matched with that selector required; and keycap
+sequences are matched explicitly. It deliberately does not use the broad
+.B Emoji=Yes
+property, which would classify ordinary ASCII
+.BR # ,
+.B *
+and the digits 0\-9 as emoji and reject a Subject reading
+.IR "Invoice #3002" .
+.SS Why regenerate it
+Unicode adds emoji. A file generated from an older version does not match
+the ones added since, so a Subject carrying a new emoji passes a rule
+written to catch it \(em silently, because a rule that matches nothing
+looks exactly like a rule whose mail has not arrived. The generated file
+names the version it came from on its second line:
+.PP
+.nf
+.RS
+head -2 /usr/local/etc/mail_filter/emoji_regex.inc
+# Generated from official Unicode Emoji 18.0.0 data.
+.RE
+.fi
+.SH OPTIONS
+Two data files are needed, and there are two ways to obtain them. The two
+ways cannot be combined.
+.TP
+.BI --download " VERSION"
+Fetch the two data files from unicode.org:
+.PP
+.nf
+.RS 12
+https://www.unicode.org/Public/\fIVERSION\fR/ucd/emoji/emoji-data.txt
+https://www.unicode.org/Public/\fIVERSION\fR/ucd/emoji/emoji-variation-sequences.txt
+.RE
+.fi
+.RS 7
+.PP
+.I VERSION
+is a Unicode version such as
+.IR 17.0.0 ,
+not a \(lqUnicode Emoji\(rq version \(em the path is under
+.IR /Public/<Unicode\ version>/ucd/emoji/ .
+The two numbering schemes have tracked each other for years, which is why
+the distinction is easy to miss.
+.PP
+A version that has not been published yet does not fail. It redirects to
+the draft data, over plain http, and the download follows that without
+saying so:
+.PP
+.nf
+https://www.unicode.org/Public/18.0.0/ucd/emoji/emoji-data.txt
+  -> 302 -> http://www.unicode.org/Public/draft/ucd/emoji/emoji-data.txt
+.fi
+.PP
+Draft data changes between runs. Check the
+.B Date:
+line in the header of the downloaded file, which is why
+.B --download
+keeps what it fetched instead of deleting it.
+.RE
+.TP
+.BI --download-dir " DIR"
+Where
+.B --download
+puts the files it fetched. Default: the current directory. They are kept
+rather than deleted, so a later run can reuse them.
+.TP
+.BI --emoji-data " FILE"
+.TQ
+.BI --variation-data " FILE"
+Use copies already on this machine. Both are required together. This is the
+form to use on a host with no route to unicode.org, or where the data files
+are held under configuration control so that the generated output can be
+reproduced.
+.TP
+.BI -o ", " --output " FILE"
+Write the generated include to
+.IR FILE .
+Without it the output goes to standard output, which is the form to use
+when piping it into
+.BR diff (1).
+.SH EXIT STATUS
+.TP
+.B 0
+The include was generated.
+.TP
+.B 1
+A data file could not be downloaded or read.
+.TP
+.B 2
+The arguments do not name a usable pair of data files \(em neither
+.B --download
+nor both of
+.BR --emoji-data " and " --variation-data ,
+or both forms at once.
+.SH FILES
+.TP
+.I /usr/local/libexec/mail_filter/generate_emoji_regex.py\ \ (FreeBSD)
+.TQ
+.I /usr/lib/mail_filter/generate_emoji_regex.py\ \ (Linux)
+The installed generator. Deliberately not on
+.IR $PATH ;
+run it with the full path shown above.
+.TP
+.I /usr/local/etc/mail_filter/emoji_regex.inc\ \ (FreeBSD)
+.TQ
+.I /etc/mail_filter/emoji_regex.inc\ \ (Linux)
+The generated include distributed with mail_filter, and where a
+regenerated one belongs.
+.SH EXAMPLES
+Generate from the current published version:
+.nf
+.RS
+/usr/local/libexec/mail_filter/generate_emoji_regex.py \\
+    --download 18.0.0 -o /tmp/emoji_regex.inc
+.RE
+.fi
+.PP
+Generate from files fetched earlier, on a host with no outbound access:
+.nf
+.RS
+/usr/local/libexec/mail_filter/generate_emoji_regex.py \\
+    --emoji-data emoji-data.txt \\
+    --variation-data emoji-variation-sequences.txt \\
+    -o /tmp/emoji_regex.inc
+.RE
+.fi
+.SS Installing a regenerated include
+Look at what changed before replacing anything \(em the file is what an
+active rule matches against, and a mistake here rejects mail:
+.PP
+.nf
+.RS
+diff /usr/local/etc/mail_filter/emoji_regex.inc /tmp/emoji_regex.inc
+cp /tmp/emoji_regex.inc /usr/local/etc/mail_filter/emoji_regex.inc
+mail_filter --configtest && service mail_filter reload
+.RE
+.fi
+.PP
+On Linux the directory is
+.I /etc/mail_filter
+and the reload is
+.BR "systemctl reload mail_filter" .
+.PP
+To see what the new file does to mail you have actually received, before
+any of it is in force, run the collected Subject lines against it:
+.PP
+.nf
+.RS
+check_regex.py known_good_subjects.txt /tmp/emoji_regex.inc --reverse
+.RE
+.fi
+.PP
+which reports the legitimate Subjects the new include would match; see
+.BR check_regex.py (1).
+.SH SEE ALSO
+.BR mail_filter (8),
+.BR mail_filter_rules.conf (5),
+.BR check_regex.py (1)
+.SH AUTHORS
+Pavel Hlubík <phlubik@seznam.cz>
+.SH COPYRIGHT
+Copyright \(co Pavel Hlubík <phlubik@seznam.cz>.
+Free software provided \(lqas is\(rq without warranty of any kind.

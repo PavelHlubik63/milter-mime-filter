@@ -1,0 +1,17 @@
+#!/bin/bash
+set -e
+
+if [ -d /run/systemd/system ]; then
+    if systemctl is-active --quiet mail_filter.service 2>/dev/null; then
+        echo "  Stopping mail_filter..."
+        systemctl stop mail_filter.service
+    fi
+    systemctl disable mail_filter.service 2>/dev/null || true
+fi
+
+# PYTHONDONTWRITEBYTECODE=1 (set in the .service file) stops the daemon
+# itself from writing bytecode cache, but an admin running the script
+# directly (--test, --configtest) outside systemd might not have that set.
+# dpkg does not know about __pycache__/ (it was never in the package's file
+# list), so it would otherwise be left behind as a non-empty directory.
+find /usr/lib/mail_filter/mail_filter -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true

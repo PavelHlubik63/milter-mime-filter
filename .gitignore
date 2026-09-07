@@ -1,0 +1,7 @@
+build/
+dist/
+*.deb
+*.pkg
+__pycache__/
+*.pyc
+.pytest_cache/

@@ -1,0 +1,23 @@
+#!/bin/sh
+# Thin wrapper so admins can run "mail_filter --configtest" etc. from
+# $PATH, matching the man pages' own SYNOPSIS (bare "mail_filter", no
+# .py suffix) and mirroring the Linux package's identically-named
+# wrapper. The real implementation stays in /usr/local/lib/mail_filter/
+# -- hier(7) reserves /usr/local/sbin for "local administration
+# utilities" and /usr/local/lib for "local libraries"; mail_filter.py's
+# own package of importable modules is a library, not itself a utility,
+# and mail_filter.py needs that package sitting next to it (see its own
+# docstring), so both live together under lib/ rather than in sbin/.
+# Real-world precedent for this split on this exact machine: dovecot
+# ships its own files under /usr/local/lib/dovecot/, not /usr/local/sbin/.
+
+# Keep Python from writing .pyc files into the package's own directory.
+# The daemon never did -- rc.d and the systemd unit both set this -- but
+# the wrapper is what an administrator runs by hand, as root, every time
+# the man pages say to check the rules with "mail_filter --configtest".
+# That import wrote a __pycache__/ into the installed tree that neither
+# pkg(8) nor dpkg knows about, so neither removes it again on deinstall.
+PYTHONDONTWRITEBYTECODE=1
+export PYTHONDONTWRITEBYTECODE
+
+exec /usr/local/bin/python3 /usr/local/lib/mail_filter/mail_filter.py "$@"

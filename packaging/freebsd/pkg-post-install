@@ -1,0 +1,192 @@
+#!/bin/sh
+# $2 is "PRE-INSTALL" or "POST-INSTALL" -- pkg calls this same script for
+# both phases (see pkg-script(5)). Everything here needs the payload to
+# already be on disk, so it only runs on POST-INSTALL.
+if [ "$2" != "POST-INSTALL" ]; then
+    exit 0
+fi
+
+CONFDIR="/usr/local/etc/mail_filter"
+# The concrete interpreter this package was built against -- same detection
+# used for the py3NN-pymilter dependency, see packaging/freebsd/build_pkg.sh.
+# Used only for the checks below; the shipped rc.d/shebangs stay generic.
+PYTHON="@PYTHON_PATH@"
+
+# The package ships this directory as root:wheel (pkg's default for files
+# with no explicit owner in the manifest); mail_filter runs as postfix, so
+# postfix needs group access to read the config inside it.
+chown root:postfix "${CONFDIR}"
+chmod 750 "${CONFDIR}"
+
+# .sample -> real file, only if it does not already exist. Tracks whether
+# mail_filter.conf specifically was just created here (as opposed to an
+# admin's pre-existing, possibly customized file) -- that distinction gates
+# the socket auto-detection below.
+MAIL_FILTER_CONF_FRESH=0
+for f in mail_filter.conf mail_filter_rules.conf mail_filter_whitelist.cidr emoji_regex.inc; do
+    if [ ! -f "${CONFDIR}/${f}" ]; then
+        cp "${CONFDIR}/${f}.sample" "${CONFDIR}/${f}"
+        chown root:postfix "${CONFDIR}/${f}"
+        chmod 640 "${CONFDIR}/${f}"
+        echo "  Installed ${CONFDIR}/${f}"
+        if [ "${f}" = "mail_filter.conf" ]; then
+            MAIL_FILTER_CONF_FRESH=1
+        fi
+    else
+        echo "  Preserved ${CONFDIR}/${f}"
+    fi
+done
+
+# When mail_filter.conf was just created from .sample above (never for a
+# pre-existing, possibly admin-customized file), pick the socket path it
+# actually needs instead of leaving the shipped /var/run/mail_filter/...
+# default in place for an admin to discover is wrong only after mail
+# silently stops being filtered.
+#
+# If Postfix's own smtpd_milters/non_smtpd_milters already references our
+# socket by name, that directive is the source of truth (this package never
+# edits main.cf, so whatever it already says is trusted as correct) --
+# resolve it to a concrete filesystem path.
+#
+# Otherwise -- Postfix's milters aren't wired up yet -- default to
+# queue_directory/private/<name> rather than the shipped path anyway. This
+# is not a chroot-detection guess: Postfix resolves "private/X" relative to
+# its own queue_directory as a general path-resolution rule, independent of
+# whether any particular service (smtpd, cleanup) happens to be chrooted --
+# a chrooted process can only reach that path, and a non-chrooted one can
+# reach it exactly as well as any other absolute path. So this one location
+# is correct whether smtpd/cleanup end up chrooted or not, now or after an
+# admin flips that setting later. On FreeBSD, where smtpd is not chrooted
+# by default, the shipped /var/run/mail_filter/... path remains fine for
+# that common case, but this still shouldn't guess wrong the moment
+# something IS chrooted -- same reasoning as the Debian package, verified
+# there end to end (see packaging/debian/postinst).
+if [ "${MAIL_FILTER_CONF_FRESH}" = "1" ] && command -v postconf >/dev/null 2>&1; then
+    SOCKET_LINE=$(grep -E '^[[:space:]]*socket[[:space:]]*=' "${CONFDIR}/mail_filter.conf" | tail -1)
+    CUR_SOCKET=$(echo "${SOCKET_LINE}" | sed -E 's/^[^=]*=[[:space:]]*//; s/^unix://')
+    SOCK_BASENAME=$(basename "${CUR_SOCKET}")
+    QUEUE_DIR=$(postconf -h queue_directory 2>/dev/null)
+
+    MILTER_DIRECTIVE=""
+    for VARNAME in smtpd_milters non_smtpd_milters; do
+        VALUE=$(postconf -h "${VARNAME}" 2>/dev/null)
+        for TOKEN in ${VALUE}; do
+            case "${TOKEN}" in
+                *"${SOCK_BASENAME}")
+                    MILTER_DIRECTIVE="${TOKEN}"
+                    ;;
+            esac
+        done
+        [ -n "${MILTER_DIRECTIVE}" ] && break
+    done
+
+    WANT_SOCKET=""
+    DETECT_MSG=""
+    if [ -n "${MILTER_DIRECTIVE}" ]; then
+        case "${MILTER_DIRECTIVE}" in
+            unix:private/*)
+                if [ -n "${QUEUE_DIR}" ]; then
+                    WANT_SOCKET="${QUEUE_DIR}/private/${MILTER_DIRECTIVE#unix:private/}"
+                fi
+                ;;
+            unix:/*)
+                WANT_SOCKET="${MILTER_DIRECTIVE#unix:}"
+                ;;
+        esac
+        [ -n "${WANT_SOCKET}" ] && DETECT_MSG="  Detected Postfix already configured with ${MILTER_DIRECTIVE};"
+    elif [ -n "${QUEUE_DIR}" ]; then
+        WANT_SOCKET="${QUEUE_DIR}/private/${SOCK_BASENAME}"
+        DETECT_MSG="  Postfix's milters aren't configured yet; defaulting to Postfix's own"
+        DETECT_MSG="${DETECT_MSG}
+  queue_directory/private/ convention (correct whether or not smtpd/cleanup
+  end up chrooted -- wire up main.cf to match, see below):"
+    fi
+
+    if [ -n "${WANT_SOCKET}" ] && [ "${WANT_SOCKET}" != "${CUR_SOCKET}" ]; then
+        sed -i '' -E "s#^([[:space:]]*socket[[:space:]]*=).*#\\1 unix:${WANT_SOCKET}#" \
+            "${CONFDIR}/mail_filter.conf"
+        chown root:postfix "${CONFDIR}/mail_filter.conf"
+        chmod 640 "${CONFDIR}/mail_filter.conf"
+        echo "${DETECT_MSG}"
+        echo "  set [milter] socket = unix:${WANT_SOCKET} in ${CONFDIR}/mail_filter.conf"
+    fi
+fi
+
+# Warn if Postfix has a chrooted smtpd/cleanup and this package's configured
+# socket is still not reachable from inside that chroot -- smtpd calls
+# smtpd_milters, cleanup calls non_smtpd_milters (for locally injected
+# mail), and either one running chrooted can only connect to a milter
+# socket that physically exists under its own queue_directory. Matched by
+# command name ($8), not by type, since smtpd normally listens on inet but
+# cleanup is always a unix-domain service -- checking type alone would miss
+# a chrooted cleanup entirely. Catches whatever the block above could not
+# resolve (no matching smtpd_milters/non_smtpd_milters entry yet, an inet:
+# milter transport, or an existing file this package preserved untouched).
+# Purely informational here: never touches Postfix's own configuration, and
+# never touches mail_filter.conf outside the fresh-install case above.
+if command -v postconf >/dev/null 2>&1; then
+    QUEUE_DIR=$(postconf -h queue_directory 2>/dev/null)
+    CHROOTED=$(postconf -M 2>/dev/null | awk '($8 == "smtpd" || $8 == "cleanup") && $5 == "y" {print $1}')
+    if [ -n "${CHROOTED}" ] && [ -n "${QUEUE_DIR}" ]; then
+        SOCKET_LINE=$(grep -E '^[[:space:]]*socket[[:space:]]*=' "${CONFDIR}/mail_filter.conf" 2>/dev/null | tail -1)
+        SOCKET_PATH=$(echo "${SOCKET_LINE}" | sed -E 's/^[^=]*=[[:space:]]*//; s/^unix://')
+        case "${SOCKET_PATH}" in
+            /*)
+                case "${SOCKET_PATH}" in
+                    "${QUEUE_DIR}"/*) ;;
+                    *)
+                        CHROOTED_LIST=$(printf '%s\n' "${CHROOTED}" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+                        echo ""
+                        echo "NOTE: Postfix has a chrooted service (${CHROOTED_LIST}) but this"
+                        echo "      package's socket is not reachable from inside that chroot:"
+                        echo "        configured socket : ${SOCKET_PATH}"
+                        echo "        Postfix chroot     : ${QUEUE_DIR}"
+                        echo "      Recommended fix in ${CONFDIR}/mail_filter.conf:"
+                        echo "        socket = unix:${QUEUE_DIR}/private/mail_filter.sock"
+                        echo "      and in Postfix main.cf:"
+                        echo "        smtpd_milters = unix:private/mail_filter.sock"
+                        echo ""
+                        ;;
+                esac
+                ;;
+        esac
+    fi
+fi
+
+# Socket directory
+if [ ! -d /var/run/mail_filter ]; then
+    install -d -o postfix -g postfix -m 750 /var/run/mail_filter
+    echo "  Created /var/run/mail_filter"
+fi
+
+# Log file
+if [ ! -f /var/log/mail_filter.log ]; then
+    install -o postfix -g postfix -m 640 /dev/null /var/log/mail_filter.log
+    echo "  Created /var/log/mail_filter.log"
+fi
+
+# Verify that the Python module Milter is importable via the interpreter
+# this package was actually built against -- the real, root problem if this
+# fails is a missing dependency, not the shebang.
+if ! ${PYTHON} -c "import Milter" 2>/dev/null; then
+    echo ""
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    echo "  WARNING: ${PYTHON} cannot import Milter (pymilter)."
+    echo "  The milter will NOT start without it."
+    echo ""
+    echo "  Install the missing dependency:"
+    echo "    pkg install @PYMILTER_PKG@"
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+elif ! /usr/local/bin/python3 -c "import Milter" 2>/dev/null; then
+    # The real interpreter works fine -- mail_filter.py's own
+    # #!/usr/bin/env python3 shebang just has nothing to resolve to.
+    echo ""
+    echo "This package needs a working #!/usr/bin/env python3 shebang."
+    echo "To ensure the shebang works run the command:"
+    echo "  ln -s ${PYTHON} /usr/local/bin/python3"
+fi
+
+# The standard, unconditional "what to do next" steps live in the
+# manifest's messages{} instead of being echoed here -- that way they are
+# also visible any time via `pkg info -D mail_filter`, not just once,
+# right after install.

@@ -1,0 +1,25 @@
+# mail_filter -- whitelist IP addresses and CIDR ranges
+# Messages from these source addresses bypass ALL filtering entirely --
+# equivalent to Postfix's mynetworks, but evaluated independently by
+# mail_filter.
+#
+# One entry per line: IPv4, IPv6, or CIDR notation.
+# Lines beginning with # are comments. Empty lines are ignored.
+#
+# Accepted formats:
+#   192.168.1.1           single IPv4 address
+#   192.168.1.0/24        IPv4 CIDR range
+#   ::1                   single IPv6 address
+#   2001:db8::/32         IPv6 CIDR range
+#
+# Reload without restart:
+#   service mail_filter reload      (FreeBSD)
+#   systemctl reload mail_filter    (Linux)
+#
+# Recommended entries:
+#   - All networks from Postfix mynetworks
+#   - Your own relay servers (even if already in mynetworks)
+#   - Authenticated submission servers (port 587 clients)
+#   - Peer MX servers that relay to this host
+#
+# Note: this whitelist is independent of Postfix mynetworks.

@@ -1,0 +1,21 @@
+name = "mail_filter";
+version = "@VERSION@";
+origin = "mail/mail_filter";
+comment = "MIME-aware Subject and body filter for Postfix";
+desc = "Postfix milter that filters mail by Subject header and message body using regex rules.\nSupports MIME encoded-words decoding, IP/CIDR whitelist and live reload.";
+maintainer = "phlubik@seznam.cz";
+www = "";
+prefix = "/usr/local";
+flatsize = @FLATSIZE@;
+deps {
+  @PYMILTER_PKG@ {
+    origin = "mail/py-milter";
+    version = "0";
+  }
+}
+messages: [
+  {
+    message: "mail_filter installed.\n\n1. Edit the whitelist:\n   /usr/local/etc/mail_filter/mail_filter_whitelist.cidr\n\n2. Enable and start:\n   sysrc mail_filter_enable=\"YES\"\n   service mail_filter start";
+    type: "install";
+  }
+]

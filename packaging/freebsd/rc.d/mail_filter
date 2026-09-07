@@ -1,0 +1,185 @@
+#!/bin/sh
+#
+# PROVIDE: mail_filter
+# REQUIRE: NETWORKING
+# BEFORE: postfix
+# KEYWORD: shutdown
+#
+# Add to /etc/rc.conf:
+#   mail_filter_enable="YES"
+
+. /etc/rc.subr
+
+name="mail_filter"
+rcvar="mail_filter_enable"
+
+load_rc_config "${name}"
+
+# Never write __pycache__/*.pyc into the root-owned installation directory --
+# applies to the daemon (started below via daemon(8)) and to `configtest`,
+# which execs mail_filter.py directly further down in this same script.
+PYTHONDONTWRITEBYTECODE=1
+export PYTHONDONTWRITEBYTECODE
+
+: ${mail_filter_enable:="NO"}
+# WARNING: Do not use the names mail_filter_user / mail_filter_group --
+# rc.subr interprets these as ${name}_user / ${name}_group and adds the -m wrapper,
+# causing daemon(8) to run as a non-root user and causing its -u option to fail ("must be running as root").
+: ${mail_filter_runas:="postfix"}
+: ${mail_filter_runas_group:="postfix"}
+: ${mail_filter_sockdir:="/var/run/mail_filter"}
+: ${mail_filter_pidfile:="/var/run/mail_filter/mail_filter.pid"}
+: ${mail_filter_logfile:="/var/log/mail_filter.log"}
+: ${mail_filter_python:="/usr/local/bin/python3"}
+: ${mail_filter_script:="/usr/local/lib/mail_filter/mail_filter.py"}
+: ${mail_filter_config:="/usr/local/etc/mail_filter/mail_filter.conf"}
+: ${mail_filter_rules:="/usr/local/etc/mail_filter/mail_filter_rules.conf"}
+
+pidfile="${mail_filter_pidfile}"
+# daemon(8) ensures daemonization and writes the child's PID to the pidfile.
+# -f  closes stdin and redirects stdout/stderr to /dev/null
+# -p  writes the child process's (Python) PID to the pidfile
+# -u  runs the child process as the specified user (requires root privileges—hence _runas, not _user)
+command="/usr/sbin/daemon"
+command_args="-f -p ${mail_filter_pidfile} -u ${mail_filter_runas} \
+    ${mail_filter_python} ${mail_filter_script}"
+procname="${mail_filter_python}"
+
+extra_commands="reload configtest"
+
+start_precmd="mail_filter_prestart"
+start_postcmd="mail_filter_poststart"
+stop_postcmd="mail_filter_poststop"
+
+# reload: Send a SIGUSR1 signal to the running process (reload the rules and whitelist).
+# WARNING: SIGHUP cannot be used—libmilter (smfi_main) intercepts it and terminates the process.
+sig_reload="USR1"
+reload_precmd="mail_filter_prereload"
+
+# configtest: checks the syntax and validity of all configuration files
+configtest_cmd="mail_filter_configtest"
+
+mail_filter_prestart()
+{
+    # --- Environmental Inspection ---------------------------------------------------
+
+    if [ ! -x "${mail_filter_python}" ]; then
+        err 1 "Python not found or not executable: ${mail_filter_python}"
+    fi
+
+    if [ ! -f "${mail_filter_script}" ]; then
+        err 1 "Milter script not found: ${mail_filter_script}"
+    fi
+
+    if [ ! -r "${mail_filter_script}" ]; then
+        err 1 "Milter script not readable: ${mail_filter_script}"
+    fi
+
+    if [ ! -f "${mail_filter_config}" ]; then
+        err 1 "Config file not found: ${mail_filter_config}"
+    fi
+
+    # The rules are optional -- without them, milter lets everything through, but we'll warn you
+    if [ ! -f "${mail_filter_rules}" ]; then
+        warn "Rules file not found: ${mail_filter_rules} -- milter will accept all messages"
+    fi
+
+    # Check if a user exists
+    if ! id "${mail_filter_runas}" > /dev/null 2>&1; then
+        err 1 "User '${mail_filter_runas}' does not exist"
+    fi
+
+    # --- Socket directory ------------------------------------------------------
+    # Create if it doesn't exist; correct ownership and permissions if it exists
+
+    if [ ! -d "${mail_filter_sockdir}" ]; then
+        install -d \
+            -o "${mail_filter_runas}" \
+            -g "${mail_filter_runas_group}" \
+            -m 750 \
+            "${mail_filter_sockdir}" \
+        || err 1 "Cannot create socket directory: ${mail_filter_sockdir}"
+    else
+        chown "${mail_filter_runas}:${mail_filter_runas_group}" "${mail_filter_sockdir}" \
+            || err 1 "Cannot set ownership of socket directory: ${mail_filter_sockdir}"
+        chmod 750 "${mail_filter_sockdir}"
+    fi
+
+    # Remove the old socket (left over from an improper termination)
+    rm -f "${mail_filter_sockdir}/mail_filter.sock"
+
+    # --- Log file ----------------------------------------------------------
+
+    if [ ! -f "${mail_filter_logfile}" ]; then
+        install \
+            -o "${mail_filter_runas}" \
+            -g "${mail_filter_runas_group}" \
+            -m 640 \
+            /dev/null "${mail_filter_logfile}" \
+        || err 1 "Cannot create log file: ${mail_filter_logfile}"
+    fi
+}
+
+mail_filter_poststart()
+{
+    # daemon(8) forked and returned a success immediately -- let's verify that Python
+    # is actually running. We'll wait a maximum of 5 seconds (pymilter taking a moment to bind to the socket).
+    local waited=0
+    local max=5
+    local pid
+
+    while [ "${waited}" -lt "${max}" ]; do
+        sleep 1
+        waited=$((waited + 1))
+
+        if [ ! -f "${mail_filter_pidfile}" ]; then
+            continue
+        fi
+
+        pid=$(cat "${mail_filter_pidfile}" 2>/dev/null)
+        if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+            echo "mail_filter running (pid ${pid})"
+            return 0
+        fi
+    done
+
+    # The process is not running -- print the last lines of the log for diagnostic purposes
+    warn "mail_filter failed to start after ${max}s"
+    if [ -f "${mail_filter_logfile}" ]; then
+        warn "Last log entries (${mail_filter_logfile}):"
+        tail -5 "${mail_filter_logfile}" | while IFS= read -r line; do
+            warn "  ${line}"
+        done
+    fi
+    return 1
+}
+
+mail_filter_poststop()
+{
+    rm -f "${mail_filter_sockdir}/mail_filter.sock"
+}
+
+mail_filter_prereload()
+{
+    # Check if the process is still running after a SIGHUP
+    if [ ! -f "${mail_filter_pidfile}" ]; then
+        err 1 "mail_filter is not running (no pidfile)"
+    fi
+    local pid
+    pid=$(cat "${mail_filter_pidfile}" 2>/dev/null)
+    if [ -z "${pid}" ] || ! kill -0 "${pid}" 2>/dev/null; then
+        err 1 "mail_filter is not running (pid ${pid:-?} not found)"
+    fi
+    echo "Reloading mail_filter (pid ${pid})."
+}
+
+mail_filter_configtest()
+{
+    if [ ! -f "${mail_filter_script}" ]; then
+        err 1 "Milter script not found: ${mail_filter_script}"
+    else
+        ${mail_filter_script} --configtest
+    fi
+}
+
+run_rc_command "$1"

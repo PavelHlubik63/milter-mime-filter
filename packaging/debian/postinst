@@ -1,0 +1,199 @@
+#!/bin/bash
+set -e
+
+CONFDIR="/etc/mail_filter"
+
+# .dpkg-dist -> real file, only if it does not already exist. Tracks
+# whether mail_filter.conf specifically was just created here (as opposed
+# to an admin's pre-existing, possibly customized file) -- that distinction
+# gates the socket auto-detection below.
+MAIL_FILTER_CONF_FRESH=0
+for f in mail_filter.conf mail_filter_rules.conf mail_filter_whitelist.cidr emoji_regex.inc; do
+    if [ ! -f "${CONFDIR}/${f}" ]; then
+        cp "${CONFDIR}/${f}.dpkg-dist" "${CONFDIR}/${f}"
+        chown root:postfix "${CONFDIR}/${f}"
+        chmod 640 "${CONFDIR}/${f}"
+        echo "  Installed ${CONFDIR}/${f}"
+        if [ "${f}" = "mail_filter.conf" ]; then
+            MAIL_FILTER_CONF_FRESH=1
+        fi
+    else
+        echo "  Preserved ${CONFDIR}/${f}"
+    fi
+done
+
+chown root:postfix "${CONFDIR}"
+chmod 750 "${CONFDIR}"
+
+# When mail_filter.conf was just created from .dpkg-dist above (never for a
+# pre-existing, possibly admin-customized file), pick the socket path it
+# actually needs instead of leaving the shipped, chroot-fragile
+# /var/run/mail_filter/... default in place for an admin to discover is
+# wrong only after mail silently stops being filtered.
+#
+# If Postfix's own smtpd_milters/non_smtpd_milters already references our
+# socket by name, that directive is the source of truth (this package never
+# edits main.cf, so whatever it already says is trusted as correct) --
+# resolve it to a concrete filesystem path.
+#
+# Otherwise -- Postfix's milters aren't wired up yet -- default to
+# queue_directory/private/<name> rather than the shipped path anyway. This
+# is not a chroot-detection guess: Postfix resolves "private/X" relative to
+# its own queue_directory as a general path-resolution rule, independent of
+# whether any particular service (smtpd, cleanup) happens to be chrooted --
+# a chrooted process can only reach that path, and a non-chrooted one can
+# reach it exactly as well as any other absolute path. So this one location
+# is correct whether smtpd/cleanup end up chrooted or not, now or after an
+# admin flips that setting later -- unlike a bare /var/run path, which only
+# works for as long as nothing consuming it is ever chrooted (Debian's own
+# default for both smtpd and cleanup).
+if [ "${MAIL_FILTER_CONF_FRESH}" = "1" ] && command -v postconf >/dev/null 2>&1; then
+    SOCKET_LINE=$(grep -E '^[[:space:]]*socket[[:space:]]*=' "${CONFDIR}/mail_filter.conf" | tail -1)
+    CUR_SOCKET=$(echo "${SOCKET_LINE}" | sed -E 's/^[^=]*=[[:space:]]*//; s/^unix://')
+    SOCK_BASENAME=$(basename "${CUR_SOCKET}")
+    QUEUE_DIR=$(postconf -h queue_directory 2>/dev/null)
+
+    MILTER_DIRECTIVE=""
+    for VARNAME in smtpd_milters non_smtpd_milters; do
+        VALUE=$(postconf -h "${VARNAME}" 2>/dev/null)
+        for TOKEN in ${VALUE}; do
+            case "${TOKEN}" in
+                *"${SOCK_BASENAME}")
+                    MILTER_DIRECTIVE="${TOKEN}"
+                    ;;
+            esac
+        done
+        [ -n "${MILTER_DIRECTIVE}" ] && break
+    done
+
+    WANT_SOCKET=""
+    DETECT_MSG=""
+    if [ -n "${MILTER_DIRECTIVE}" ]; then
+        case "${MILTER_DIRECTIVE}" in
+            unix:private/*)
+                if [ -n "${QUEUE_DIR}" ]; then
+                    WANT_SOCKET="${QUEUE_DIR}/private/${MILTER_DIRECTIVE#unix:private/}"
+                fi
+                ;;
+            unix:/*)
+                WANT_SOCKET="${MILTER_DIRECTIVE#unix:}"
+                ;;
+        esac
+        [ -n "${WANT_SOCKET}" ] && DETECT_MSG="  Detected Postfix already configured with ${MILTER_DIRECTIVE};"
+    elif [ -n "${QUEUE_DIR}" ]; then
+        WANT_SOCKET="${QUEUE_DIR}/private/${SOCK_BASENAME}"
+        DETECT_MSG="  Postfix's milters aren't configured yet; defaulting to Postfix's own"$'\n'"  queue_directory/private/ convention (correct whether or not smtpd/cleanup"$'\n'"  end up chrooted -- wire up main.cf to match, see below):"
+    fi
+
+    if [ -n "${WANT_SOCKET}" ] && [ "${WANT_SOCKET}" != "${CUR_SOCKET}" ]; then
+        sed -i -E "s#^([[:space:]]*socket[[:space:]]*=).*#\\1 unix:${WANT_SOCKET}#" \
+            "${CONFDIR}/mail_filter.conf"
+        chown root:postfix "${CONFDIR}/mail_filter.conf"
+        chmod 640 "${CONFDIR}/mail_filter.conf"
+        echo "${DETECT_MSG}"
+        echo "  set [milter] socket = unix:${WANT_SOCKET} in ${CONFDIR}/mail_filter.conf"
+    fi
+fi
+
+# Warn if Postfix has a chrooted smtpd/cleanup and this package's configured
+# socket is still not reachable from inside that chroot -- smtpd calls
+# smtpd_milters, cleanup calls non_smtpd_milters (for locally injected
+# mail), and either one running chrooted can only connect to a milter
+# socket that physically exists under its own queue_directory. Matched by
+# command name ($8), not by type, since smtpd normally listens on inet but
+# cleanup is always a unix-domain service -- checking type alone would miss
+# a chrooted cleanup entirely. Catches whatever the block above could not
+# resolve (no matching smtpd_milters/non_smtpd_milters entry yet, an inet:
+# milter transport, or an existing file this package preserved untouched).
+# Purely informational here: never touches Postfix's own configuration, and
+# never touches mail_filter.conf outside the fresh-install case above.
+if command -v postconf >/dev/null 2>&1; then
+    QUEUE_DIR=$(postconf -h queue_directory 2>/dev/null)
+    CHROOTED=$(postconf -M 2>/dev/null | awk '($8 == "smtpd" || $8 == "cleanup") && $5 == "y" {print $1}')
+    if [ -n "${CHROOTED}" ] && [ -n "${QUEUE_DIR}" ]; then
+        SOCKET_LINE=$(grep -E '^[[:space:]]*socket[[:space:]]*=' "${CONFDIR}/mail_filter.conf" 2>/dev/null | tail -1)
+        SOCKET_PATH=$(echo "${SOCKET_LINE}" | sed -E 's/^[^=]*=[[:space:]]*//; s/^unix://')
+        case "${SOCKET_PATH}" in
+            /*)
+                case "${SOCKET_PATH}" in
+                    "${QUEUE_DIR}"/*) ;;
+                    *)
+                        CHROOTED_LIST=$(printf '%s\n' "${CHROOTED}" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+                        echo ""
+                        echo "NOTE: Postfix has a chrooted service (${CHROOTED_LIST}) but this"
+                        echo "      package's socket is not reachable from inside that chroot:"
+                        echo "        configured socket : ${SOCKET_PATH}"
+                        echo "        Postfix chroot     : ${QUEUE_DIR}"
+                        echo "      Recommended fix in ${CONFDIR}/mail_filter.conf:"
+                        echo "        socket = unix:${QUEUE_DIR}/private/mail_filter.sock"
+                        echo "      and in Postfix main.cf:"
+                        echo "        smtpd_milters = unix:private/mail_filter.sock"
+                        echo ""
+                        ;;
+                esac
+                ;;
+        esac
+    fi
+fi
+
+if [ ! -f /var/log/mail_filter.log ]; then
+    install -o postfix -g postfix -m 640 /dev/null /var/log/mail_filter.log
+    echo "  Created /var/log/mail_filter.log"
+fi
+
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+    systemctl enable mail_filter.service
+    if [ "$1" = "configure" ]; then
+        systemctl restart mail_filter.service || true
+    fi
+fi
+
+# Build the "unix:..." form actually shown below from mail_filter.conf's own
+# final socket= value (after every block above has had its say), not a
+# hardcoded guess -- a static "smtpd_milters = ... unix:private/..." hint
+# would be flat wrong advice on a Postfix that isn't chrooted at all and
+# whose socket therefore correctly lives somewhere else entirely. Only the
+# display form is chosen here (private/<name> when the path sits under
+# Postfix's own queue_directory, the literal absolute path otherwise); the
+# actual socket path was already decided above and is never touched here.
+MILTER_HINT="unix:private/mail_filter.sock"
+if command -v postconf >/dev/null 2>&1; then
+    FINAL_SOCKET_LINE=$(grep -E '^[[:space:]]*socket[[:space:]]*=' "${CONFDIR}/mail_filter.conf" 2>/dev/null | tail -1)
+    FINAL_SOCKET=$(echo "${FINAL_SOCKET_LINE}" | sed -E 's/^[^=]*=[[:space:]]*//; s/^unix://')
+    QUEUE_DIR=$(postconf -h queue_directory 2>/dev/null)
+    if [ -n "${FINAL_SOCKET}" ]; then
+        if [ -n "${QUEUE_DIR}" ]; then
+            case "${FINAL_SOCKET}" in
+                "${QUEUE_DIR}"/private/*)
+                    MILTER_HINT="unix:private/${FINAL_SOCKET#"${QUEUE_DIR}"/private/}"
+                    ;;
+                *)
+                    MILTER_HINT="unix:${FINAL_SOCKET}"
+                    ;;
+            esac
+        else
+            MILTER_HINT="unix:${FINAL_SOCKET}"
+        fi
+    fi
+fi
+
+echo ""
+echo "================================================================"
+echo "  mail_filter installed."
+echo ""
+echo "  1. Edit the whitelist:"
+echo "     /etc/mail_filter/mail_filter_whitelist.cidr"
+echo ""
+echo "  2. Verify Postfix main.cf contains:"
+echo "     smtpd_milters = ... ${MILTER_HINT}"
+echo "     non_smtpd_milters = ... ${MILTER_HINT}"
+echo "     milter_default_action = accept"
+echo "     milter_protocol = 6"
+echo ""
+echo "  3. Reload Postfix:"
+echo "     postfix reload"
+echo ""
+echo "  4. Check the log:"
+echo "     tail -f /var/log/mail_filter.log"
+echo "================================================================"
