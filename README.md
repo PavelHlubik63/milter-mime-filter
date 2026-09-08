@@ -52,7 +52,7 @@ Download the `.pkg` for the version you want from the [Releases page](../../rele
 pkg add mail_filter-<version>.pkg
 ```
 
-The post-install step creates the working config from the `.sample` files (without overwriting an existing config), creates `/var/run/mail_filter` and `/var/log/mail_filter.log`, and checks that `pymilter` is importable.
+The post-install step creates the working config from the `.sample` files (without overwriting an existing config), creates `/var/run/mail_filter` (for the PID file) and `/var/log/mail_filter.log`, and checks that `pymilter` is importable.
 
 ```sh
 sysrc mail_filter_enable="YES"
@@ -70,26 +70,24 @@ systemctl enable --now mail_filter
 
 ### Postfix integration
 
-Add the milter socket to `main.cf`:
+Add the milter to `main.cf`, the same way on both platforms:
 
 ```
-smtpd_milters = unix:/var/run/mail_filter/mail_filter.sock
+smtpd_milters     = unix:private/mail_filter.sock
+non_smtpd_milters = unix:private/mail_filter.sock
 milter_default_action = accept
+milter_protocol = 6
 ```
 
-**If `smtpd` is chrooted** (check `postconf -M` — a `y` in the chroot column), Postfix can only reach a milter socket that physically exists under its own `queue_directory`. The path above won't work; use Postfix's own `private/` convention instead, matching `queue_directory` (`postconf -h queue_directory`, typically `/var/spool/postfix`):
+`non_smtpd_milters` covers locally injected mail, which reaches Postfix through `cleanup` rather than `smtpd`; leave it out and `sendmail`-submitted mail passes unfiltered. `milter_protocol = 6` is what libmilter speaks here.
 
-```
-smtpd_milters = unix:private/mail_filter.sock
-```
+`private/…` is Postfix's own convention: it resolves the name relative to `queue_directory` (`postconf -h queue_directory`, normally `/var/spool/postfix`), so the socket lives at `/var/spool/postfix/private/mail_filter.sock`. That is the matching `socket` value in `mail_filter.conf`, and it is what the post-install step writes there when it creates the file — so the two sides agree out of the box.
 
-and set the matching path in `mail_filter.conf`:
+This one location is correct **whether or not** `smtpd` and `cleanup` are chrooted, on FreeBSD as much as on Linux. A chrooted process can reach nothing outside `queue_directory`, and a non-chrooted one reaches that path exactly as easily as any other. It also stays correct if the chroot setting is flipped later.
 
-```
-socket = unix:/var/spool/postfix/private/mail_filter.sock
-```
+An absolute path somewhere else — `unix:/var/run/mail_filter/mail_filter.sock`, say — works too, but only for as long as nothing is chrooted (`postconf -M`, a `y` in the chroot column). If you prefer one, set the identical path on both sides: `smtpd_milters` in `main.cf` and `socket` in `mail_filter.conf`.
 
-If `mail_filter.conf` is being created fresh by this install (first install, or the file was deleted) and Postfix's `smtpd_milters`/`non_smtpd_milters` already reference this socket, the FreeBSD/Debian post-install scripts resolve the correct path themselves and write it into the new file directly — Postfix's own directives are treated as the source of truth, and this package never edits `main.cf`. If an *existing* `mail_filter.conf` is preserved instead, or Postfix isn't wired up yet to determine the path from, the scripts fall back to detecting the chroot mismatch and printing the exact fix.
+This package never edits `main.cf`. If `mail_filter.conf` is created fresh by the install (first install, or the file was deleted) and Postfix's `smtpd_milters`/`non_smtpd_milters` already name this socket, the post-install scripts take Postfix's own directive as the source of truth and write the resolved path into the new file. If an existing `mail_filter.conf` is preserved instead, or Postfix is not wired up yet, they change nothing and print the exact fix when they can see a mismatch.
 
 ## Configuration
 

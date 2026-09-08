@@ -46,10 +46,9 @@ chown root:postfix "${CONFDIR}"
 chmod 750 "${CONFDIR}"
 
 # When mail_filter.conf was just created from .dpkg-dist above (never for a
-# pre-existing, possibly admin-customized file), pick the socket path it
-# actually needs instead of leaving the shipped, chroot-fragile
-# /var/run/mail_filter/... default in place for an admin to discover is
-# wrong only after mail silently stops being filtered.
+# pre-existing, possibly admin-customized file), resolve the socket path
+# against this machine rather than trusting the sample's guess at
+# queue_directory.
 #
 # If Postfix's own smtpd_milters/non_smtpd_milters already references our
 # socket by name, that directive is the source of truth (this package never
@@ -66,7 +65,8 @@ chmod 750 "${CONFDIR}"
 # is correct whether smtpd/cleanup end up chrooted or not, now or after an
 # admin flips that setting later -- unlike a bare /var/run path, which only
 # works for as long as nothing consuming it is ever chrooted (Debian's own
-# default for both smtpd and cleanup).
+# default for both smtpd and cleanup). The shipped sample names this same
+# location, so this step normally only substitutes the real queue_directory.
 if [ "${MAIL_FILTER_CONF_FRESH}" = "1" ] && command -v postconf >/dev/null 2>&1; then
     SOCKET_LINE=$(grep -E '^[[:space:]]*socket[[:space:]]*=' "${CONFDIR}/mail_filter.conf" | tail -1)
     CUR_SOCKET=$(echo "${SOCKET_LINE}" | sed -E 's/^[^=]*=[[:space:]]*//; s/^unix://')

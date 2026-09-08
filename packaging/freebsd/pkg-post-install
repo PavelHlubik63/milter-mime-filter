@@ -57,10 +57,9 @@ for f in mail_filter.conf mail_filter_rules.conf mail_filter_whitelist.cidr emoj
 done
 
 # When mail_filter.conf was just created from .sample above (never for a
-# pre-existing, possibly admin-customized file), pick the socket path it
-# actually needs instead of leaving the shipped /var/run/mail_filter/...
-# default in place for an admin to discover is wrong only after mail
-# silently stops being filtered.
+# pre-existing, possibly admin-customized file), resolve the socket path
+# against this machine rather than trusting the sample's guess at
+# queue_directory.
 #
 # If Postfix's own smtpd_milters/non_smtpd_milters already references our
 # socket by name, that directive is the source of truth (this package never
@@ -75,11 +74,12 @@ done
 # a chrooted process can only reach that path, and a non-chrooted one can
 # reach it exactly as well as any other absolute path. So this one location
 # is correct whether smtpd/cleanup end up chrooted or not, now or after an
-# admin flips that setting later. On FreeBSD, where smtpd is not chrooted
-# by default, the shipped /var/run/mail_filter/... path remains fine for
-# that common case, but this still shouldn't guess wrong the moment
-# something IS chrooted -- same reasoning as the Debian package, verified
-# there end to end (see packaging/debian/postinst).
+# admin flips that setting later. FreeBSD's smtpd is not chrooted by
+# default and Debian's usually is, but that changes nothing here: the
+# same location is right either way, which is why both packages ship it as
+# the sample default and why the documentation names one path rather than
+# one per platform. Same reasoning as the Debian package, verified there
+# end to end (see packaging/debian/postinst).
 if [ "${MAIL_FILTER_CONF_FRESH}" = "1" ] && command -v postconf >/dev/null 2>&1; then
     SOCKET_LINE=$(grep -E '^[[:space:]]*socket[[:space:]]*=' "${CONFDIR}/mail_filter.conf" | tail -1)
     CUR_SOCKET=$(echo "${SOCKET_LINE}" | sed -E 's/^[^=]*=[[:space:]]*//; s/^unix://')

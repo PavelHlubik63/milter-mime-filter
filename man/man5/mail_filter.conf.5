@@ -1,4 +1,4 @@
-.TH MAIL_FILTER.CONF 5 "August 2026" "mail_filter 1.0.3" "File Formats"
+.TH MAIL_FILTER.CONF 5 "August 2026" "mail_filter 1.0.4" "File Formats"
 .nh
 .SH NAME
 mail_filter.conf \- configuration file for mail_filter
@@ -57,35 +57,11 @@ deletes it.
 .SS [milter]
 .TP
 .B socket = \fIendpoint\fR
-Unix-domain milter endpoint. The default shipped in the sample config
-works when Postfix's
-.B smtpd
-is not chrooted (check with
-.BR "postconf -M" ;
-a
-.B y
-in the chroot column means it is chrooted -- FreeBSD's default Postfix is
-not, Debian/Ubuntu's often is):
-.PP
-.nf
-.RS
-socket = unix:/var/run/mail_filter/mail_filter.sock
-.RE
-.fi
-.PP
-If
-.B smtpd
-.B is
-chrooted, it can only reach a milter socket that physically exists under
-its own
-.B queue_directory
-(see
-.BR "postconf -h queue_directory" ,
-typically
-.IR /var/spool/postfix ).
-Use Postfix's own
+Unix-domain milter endpoint. The default shipped in the sample config, and
+what the post-install step writes when it creates this file, is Postfix's
+own
 .B private/
-convention instead, on both sides:
+convention:
 .PP
 .nf
 .RS
@@ -97,6 +73,40 @@ with
 .B "smtpd_milters = unix:private/mail_filter.sock"
 in
 .BR main.cf .
+Postfix resolves
+.B private/X
+relative to its
+.B queue_directory
+(see
+.BR "postconf -h queue_directory" ,
+normally
+.IR /var/spool/postfix ),
+so both lines name the same file.
+.PP
+This location is correct whether or not
+.B smtpd
+and
+.B cleanup
+are chrooted, on FreeBSD as much as on Linux. A chrooted process can reach
+nothing outside
+.BR queue_directory ,
+and a non-chrooted one reaches that path as easily as any other; the setting
+can also be flipped later without breaking anything.
+.PP
+An absolute path elsewhere works too, but only while nothing is chrooted
+(check with
+.BR "postconf -M" ;
+a
+.B y
+in the chroot column means it is). Set the identical path on both sides if
+you use one:
+.PP
+.nf
+.RS
+socket = unix:/var/run/mail_filter/mail_filter.sock
+.RE
+.fi
+.PP
 If this file is being created fresh by the install (first install, or the
 file was deleted) and Postfix's
 .B smtpd_milters
