@@ -1,4 +1,4 @@
-.TH MAIL_FILTER 8 "August 2026" "mail_filter 1.0.2" "System Administration"
+.TH MAIL_FILTER 8 "August 2026" "mail_filter 1.0.3" "System Administration"
 .SH NAME
 mail_filter \- MIME-aware Subject and body milter for Postfix
 .SH SYNOPSIS
@@ -203,6 +203,13 @@ This makes a complete alternate configuration tree portable as a directory.
 .B \-\-configtest
 Validate the configuration, rules, and whitelist files, then exit.
 A structured report is written to standard output.
+Among the checks is whether the user the daemon runs as
+.RB ( postfix )
+can read each of those files. That question is answered for that user
+regardless of who runs the test, because root can read a
+.I root:wheel
+mode 0640 file and the daemon cannot; a check that only asked whether the
+caller could read them passed on configurations that then failed at start.
 Exit status is 0 if all checks pass, or a positive integer equal to
 the number of errors found.
 This option is equivalent to
@@ -425,12 +432,25 @@ Start the milter via
 .IR daemon (8).
 The socket directory is created or repaired, any stale socket file is
 removed, and the log file is created if absent.
+Refuses to start, naming the file, if the configuration, rules or whitelist
+cannot be read by
+.IR mail_filter_runas .
 After forking,
 .BR daemon (8)
 writes the PID of the Python process to
 .IR /var/run/mail_filter/mail_filter.pid .
 The start command waits up to five seconds and verifies that the
-process is still alive.
+process is still alive; if it is not, the command exits non-zero and prints
+the tail of
+.I /var/log/mail_filter.log
+\(em but only if this attempt actually wrote to it. A daemon that failed
+before it could open its log file has written nothing there, and its reason
+went to syslog instead: look for it with
+.BR "grep 'mail_filter\e[' /var/log/messages" .
+The bracket matters. The rc.d script's own warnings reach syslog as well,
+and they are written after the daemon's, so a plain
+.B grep mail_filter
+ends with the advice rather than with the reason for the failure.
 .TP
 .B stop
 Send
@@ -448,6 +468,9 @@ to reload rules and whitelist without a restart.
 .B configtest
 Run a comprehensive sanity check: verify the Python binary, check the
 script for syntax errors, and validate every rule and whitelist entry.
+Runs as
+.IR mail_filter_runas ,
+not as root, so that it sees the files exactly as the daemon will.
 Exits 0 on success.
 .PP
 To enable at boot add to
@@ -817,6 +840,22 @@ if legitimate matches are being missed near the end of long messages.
 Run
 .B \-\-configtest
 to identify the offending line number in the rules file.
+.TP
+.B The service will not start and the log says nothing
+The daemon writes startup failures to standard error, before it has opened
+its own log file \(em it cannot open it earlier, because the path is in the
+configuration file it is still reading. On Linux those lines are in the
+journal
+.RB ( "journalctl \-u mail_filter" );
+on FreeBSD they are in syslog
+.RB ( "grep 'mail_filter\e[' /var/log/messages" ),
+not in
+.IR /var/log/mail_filter.log .
+The most common cause is a configuration file the
+.B postfix
+user cannot read;
+.B \-\-configtest
+names it.
 .SH FILES
 .TP
 .I /usr/local/sbin/mail_filter\ \ (FreeBSD)

@@ -43,6 +43,25 @@ def run_configtest(config_path: Optional[str] = None) -> int:
     rules_path = state.resolve_config_path(config_path, rules_value) if config_path != state._CONFIG_FILE or not os.path.isabs(rules_value) else rules_value
     whitelist_path = state.resolve_config_path(config_path, whitelist_value) if config_path != state._CONFIG_FILE or not os.path.isabs(whitelist_value) else whitelist_value
 
+    # Asked as the daemon's user, not as whoever is running this. root can
+    # read a root:wheel 0640 file, so a --configtest run as root -- the
+    # normal way to run it -- used to bless a configuration that would take
+    # the daemon down at start, or worse, silently leave it on defaults.
+    print(f"==> Checking that the daemon user ({state.DAEMON_USER}) can read these files")
+    for path in (config_path, rules_path, whitelist_path):
+        if not os.path.exists(path):
+            continue
+        verdict = state.readable_by_user(path, state.DAEMON_USER)
+        if verdict is None:
+            print(f"    WARN: user {state.DAEMON_USER} does not exist here -- check skipped")
+            break
+        if verdict:
+            print(f"    OK:   {path}")
+        else:
+            print(f"    FAIL: {path} is {state.describe_owner(path)}"
+                  f" -- not readable by {state.DAEMON_USER}")
+            errors += 1
+
     print("==> Checking milter logging settings")
     timestamp_format = cfg.get("milter", "log_timestamp", fallback="bsd").strip()
     try:

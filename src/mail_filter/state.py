@@ -12,7 +12,10 @@ names point to, and a "from" import would keep pointing at the old object.
 """
 
 import configparser
+import grp
 import os
+import pwd
+import stat
 import sys
 
 _DEFAULT_MAX_BODY_KB = 512
@@ -33,6 +36,12 @@ _WHITELIST_FALLBACK = (
     if sys.platform.startswith("freebsd")
     else "/etc/mail_filter/mail_filter_whitelist.cidr"
 )
+
+# The user both packages run the daemon as: the User= in the systemd unit
+# and mail_filter_runas in the rc.d script. Kept here so --configtest can
+# ask "can *that* user read this?" on either platform, where no rc.d script
+# is around to answer it.
+DAEMON_USER = "postfix"
 
 rules: list = []
 whitelist: list = []
@@ -80,6 +89,94 @@ def read_config(parser, path):
         )
 
     return True
+
+
+def _granted(st, uid, gids, user_bit, group_bit, other_bit):
+    """Which of the three permission triads applies, and does it grant?
+
+    POSIX picks exactly one triad -- owner, else group, else other -- and
+    does not fall through to a more permissive one. A file owned by the
+    user with mode 0044 is therefore *not* readable by that user.
+    """
+    if st.st_uid == uid:
+        return bool(st.st_mode & user_bit)
+    if st.st_gid in gids:
+        return bool(st.st_mode & group_bit)
+    return bool(st.st_mode & other_bit)
+
+
+def readable_by_user(path, username):
+    """Could ``username`` open ``path`` for reading?
+
+    Answered from stat() data rather than by changing identity, so it is
+    safe to call from a root process -- and it gives the honest answer for
+    somebody else, which is the point. Root can read a root:wheel 0640
+    file; the postfix user cannot, and a --configtest run as root that only
+    asks "can I read this?" reports success on a configuration that will
+    take the daemon down at start.
+
+    Every directory along the way must be searchable, then the file itself
+    readable. Returns True, False, or None when the question cannot be
+    answered -- there is no such user on this system, or something on the
+    path is missing.
+    """
+    try:
+        pw = pwd.getpwnam(username)
+    except KeyError:
+        return None
+
+    uid = pw.pw_uid
+    gids = {pw.pw_gid}
+    for group in grp.getgrall():
+        if username in group.gr_mem:
+            gids.add(group.gr_gid)
+
+    path = os.path.abspath(path)
+    components = []
+    head = path
+    while True:
+        components.append(head)
+        parent = os.path.dirname(head)
+        if parent == head:
+            break
+        head = parent
+    components.reverse()
+
+    last = len(components) - 1
+    for index, component in enumerate(components):
+        try:
+            st = os.stat(component)
+        except OSError:
+            return None
+        if index == last:
+            ok = _granted(st, uid, gids,
+                          stat.S_IRUSR, stat.S_IRGRP, stat.S_IROTH)
+        else:
+            ok = _granted(st, uid, gids,
+                          stat.S_IXUSR, stat.S_IXGRP, stat.S_IXOTH)
+        if not ok:
+            return False
+
+    return True
+
+
+def describe_owner(path):
+    """"root:postfix 0644", for an error message that says what to change."""
+    try:
+        st = os.stat(path)
+    except OSError as exc:
+        return str(exc)
+    try:
+        owner = pwd.getpwuid(st.st_uid).pw_name
+    except KeyError:
+        owner = str(st.st_uid)
+    try:
+        group = grp.getgrgid(st.st_gid).gr_name
+    except KeyError:
+        group = str(st.st_gid)
+    return "%s:%s %04o" % (owner, group, stat.S_IMODE(st.st_mode))
+
+
 max_body_bytes: int = _DEFAULT_MAX_BODY_KB * 1024
 log_match_max_chars: int = _DEFAULT_LOG_MATCH_MAX_CHARS
 add_warn_header: bool = False
