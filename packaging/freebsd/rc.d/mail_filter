@@ -34,14 +34,21 @@ export PYTHONDONTWRITEBYTECODE
 : ${mail_filter_script:="/usr/local/lib/mail_filter/mail_filter.py"}
 : ${mail_filter_config:="/usr/local/etc/mail_filter/mail_filter.conf"}
 : ${mail_filter_rules:="/usr/local/etc/mail_filter/mail_filter_rules.conf"}
+: ${mail_filter_whitelist:="/usr/local/etc/mail_filter/mail_filter_whitelist.cidr"}
 
 pidfile="${mail_filter_pidfile}"
 # daemon(8) ensures daemonization and writes the child's PID to the pidfile.
 # -f  closes stdin and redirects stdout/stderr to /dev/null
+# -S  then redirects stdout/stderr to syslog instead (daemon(8) applies -f
+#     first, then the syslog redirection), and -T tags the messages. Without
+#     this, a daemon that dies before it can open its own log file -- an
+#     unreadable mail_filter.conf, a missing module, a socket it cannot
+#     bind -- takes the reason with it into /dev/null. systemd captures
+#     stderr into the journal on Debian; this is the FreeBSD equivalent.
 # -p  writes the child process's (Python) PID to the pidfile
 # -u  runs the child process as the specified user (requires root privileges—hence _runas, not _user)
 command="/usr/sbin/daemon"
-command_args="-f -p ${mail_filter_pidfile} -u ${mail_filter_runas} \
+command_args="-f -S -T ${name} -p ${mail_filter_pidfile} -u ${mail_filter_runas} \
     ${mail_filter_python} ${mail_filter_script}"
 procname="${mail_filter_python}"
 
@@ -89,6 +96,18 @@ mail_filter_prestart()
         err 1 "User '${mail_filter_runas}' does not exist"
     fi
 
+    # Readability is checked as the user the daemon will run as, not as root.
+    # root can read a root:wheel 0640 file and the postfix user cannot, so
+    # asking it here as ourselves would prove nothing. Catching it now puts
+    # the reason on the administrator's terminal, instead of leaving a daemon
+    # that exits a second later somewhere out of sight.
+    for _f in "${mail_filter_config}" "${mail_filter_rules}" "${mail_filter_whitelist}"; do
+        [ -f "${_f}" ] || continue
+        if ! su -m "${mail_filter_runas}" -c "test -r ${_f}" 2>/dev/null; then
+            err 1 "not readable by user '${mail_filter_runas}': ${_f} is $(stat -f '%Sp %Su:%Sg' "${_f}") -- fix its ownership or mode"
+        fi
+    done
+
     # --- Socket directory ------------------------------------------------------
     # Create if it doesn't exist; correct ownership and permissions if it exists
 
@@ -118,6 +137,11 @@ mail_filter_prestart()
             /dev/null "${mail_filter_logfile}" \
         || err 1 "Cannot create log file: ${mail_filter_logfile}"
     fi
+
+    # Remembered so that a failed start can tell whether the last lines of the
+    # log belong to this attempt or to the previous, successful one. Same shell
+    # process as mail_filter_poststart, so a plain variable carries across.
+    _mail_filter_log_size=$(wc -c < "${mail_filter_logfile}" 2>/dev/null || echo 0)
 }
 
 mail_filter_poststart()
@@ -143,15 +167,34 @@ mail_filter_poststart()
         fi
     done
 
-    # The process is not running -- print the last lines of the log for diagnostic purposes
+    # The process is not running. Show the tail of the log only if this attempt
+    # actually wrote to it -- otherwise those lines are from the previous run,
+    # and the last of them says the daemon started successfully, which is a
+    # thoroughly misleading thing to print underneath "failed to start".
     warn "mail_filter failed to start after ${max}s"
+
+    local size_now=0
     if [ -f "${mail_filter_logfile}" ]; then
+        size_now=$(wc -c < "${mail_filter_logfile}" 2>/dev/null || echo 0)
+    fi
+
+    if [ "${size_now}" -gt "${_mail_filter_log_size:-0}" ]; then
         warn "Last log entries (${mail_filter_logfile}):"
         tail -5 "${mail_filter_logfile}" | while IFS= read -r line; do
             warn "  ${line}"
         done
+    else
+        warn "Nothing was written to ${mail_filter_logfile} during this attempt --"
+        warn "the daemon died before it could open its log file. The reason went"
+        warn "to syslog instead. These very warnings go there too, so match the"
+        warn "daemon's own tag or they will bury it:"
+        warn "  grep '${name}\[' /var/log/messages | tail -20"
     fi
-    return 1
+
+    # err exits with this status. Returning it instead was swallowed: rc.subr
+    # ignores what start_postcmd returns, so "service mail_filter start"
+    # reported success on a daemon that never came up.
+    err 1 "mail_filter did not start"
 }
 
 mail_filter_poststop()
@@ -177,9 +220,17 @@ mail_filter_configtest()
 {
     if [ ! -f "${mail_filter_script}" ]; then
         err 1 "Milter script not found: ${mail_filter_script}"
-    else
-        ${mail_filter_script} --configtest
     fi
+
+    # Run as the daemon's user. As root this used to pass on a configuration
+    # root could read and postfix could not -- precisely the case worth
+    # catching, and the one that hid the 1.0.1 bug.
+    #
+    # The interpreter is named outright rather than left to the script's
+    # "#!/usr/bin/env python3" line: su(1) hands the target user a PATH from
+    # login.conf, which on a stock FreeBSD does not include /usr/local/bin,
+    # and env(1) then fails to find python3 at all.
+    su -m "${mail_filter_runas}" -c "${mail_filter_python} ${mail_filter_script} --configtest"
 }
 
 run_rc_command "$1"

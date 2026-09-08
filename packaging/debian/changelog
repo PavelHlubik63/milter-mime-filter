@@ -1,3 +1,44 @@
+mail-filter (1.0.3) unstable; urgency=medium
+
+  * A daemon that dies during startup now says why on FreeBSD. It writes the
+    reason to stderr, and the rc.d script handed stderr to daemon(8) with -f,
+    which sends it to /dev/null; the daemon cannot write to its own log file
+    yet, because the path to it is in the configuration it just failed to
+    read. Added -S -T to daemon(8) so startup output goes to syslog, which is
+    what systemd's journal already did on Debian.
+
+  * A failed start no longer prints the tail of the log as its diagnosis
+    unless this attempt actually wrote to it. It used to show five lines from
+    the previous, successful run -- the last of them announcing that the
+    daemon had started -- directly underneath "failed to start".
+
+  * "service mail_filter start" now exits non-zero when the daemon does not
+    come up. rc.subr ignores the return value of start_postcmd, so the script
+    knew about the failure and reported success anyway.
+
+  * "service mail_filter configtest" and --configtest now answer the question
+    that matters: can the *daemon's* user read these files? Run as root, both
+    used to pass on a configuration root could read and postfix could not --
+    the exact blind spot that hid the bug fixed in 1.0.1.
+
+  * Purging the Debian package no longer deletes an administrator's own copy
+    of the log. postrm removed /var/log/mail_filter.log.* , which matches
+    mail_filter.log.save just as happily as logrotate's mail_filter.log.1;
+    it is now .log.[0-9]* .
+
+ -- Pavel Hlubík <phlubik@seznam.cz>  Tue, 08 Sep 2026 16:00:00 +0000
+
+mail-filter (1.0.2) unstable; urgency=medium
+
+  * Configuration files are installed 0644 rather than 0640. The directory
+    above them is 0750 root:postfix, so nothing outside root and the daemon
+    can reach them whatever their mode -- the group bit protected nothing and
+    cost something. cp preserves the mode of its source, so
+    "cp mail_filter.conf.dpkg-dist mail_filter.conf" -- the obvious thing to
+    do -- used to produce a file the daemon could not read.
+
+ -- Pavel Hlubík <phlubik@seznam.cz>  Tue, 08 Sep 2026 12:30:00 +0000
+
 mail-filter (1.0.1) unstable; urgency=medium
 
   * A configuration file the daemon cannot read is now an error rather than

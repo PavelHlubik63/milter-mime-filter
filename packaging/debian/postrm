@@ -9,7 +9,13 @@ set -e
 # remove them on its own, hence doing it here explicitly.
 if [ "$1" = "purge" ]; then
     rm -rf /etc/mail_filter
-    rm -f /var/log/mail_filter.log /var/log/mail_filter.log.*
+    # Deliberately .log.[0-9]* and not .log.* -- logrotate names its archives
+    # mail_filter.log.1, mail_filter.log.2.gz and so on, all of which start
+    # with a digit, while an administrator saving the log before a purge
+    # reaches for mail_filter.log.save or mail_filter.log.presave. The wider
+    # glob swallowed those too, which turned "back it up first" into a way of
+    # losing it.
+    rm -f /var/log/mail_filter.log /var/log/mail_filter.log.[0-9]*
 fi
 
 # Bytecode left behind by a hand-run "mail_filter --configtest" from before
