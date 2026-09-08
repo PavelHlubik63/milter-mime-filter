@@ -28,7 +28,7 @@ for f in mail_filter.conf mail_filter_rules.conf mail_filter_whitelist.cidr emoj
     if [ ! -f "${CONFDIR}/${f}" ]; then
         cp "${CONFDIR}/${f}.sample" "${CONFDIR}/${f}"
         chown root:postfix "${CONFDIR}/${f}"
-        chmod 640 "${CONFDIR}/${f}"
+        chmod 644 "${CONFDIR}/${f}"
         echo "  Installed ${CONFDIR}/${f}"
         if [ "${f}" = "mail_filter.conf" ]; then
             MAIL_FILTER_CONF_FRESH=1
@@ -51,7 +51,7 @@ done
 for f in mail_filter.conf mail_filter_rules.conf mail_filter_whitelist.cidr emoji_regex.inc; do
     if [ -f "${CONFDIR}/${f}" ] && ! su -m postfix -c "test -r ${CONFDIR}/${f}" 2>/dev/null; then
         chown root:postfix "${CONFDIR}/${f}"
-        chmod 640 "${CONFDIR}/${f}"
+        chmod 644 "${CONFDIR}/${f}"
         echo "  Fixed ${CONFDIR}/${f} -- it was not readable by the postfix user"
     fi
 done
@@ -125,7 +125,7 @@ if [ "${MAIL_FILTER_CONF_FRESH}" = "1" ] && command -v postconf >/dev/null 2>&1;
         sed -i '' -E "s#^([[:space:]]*socket[[:space:]]*=).*#\\1 unix:${WANT_SOCKET}#" \
             "${CONFDIR}/mail_filter.conf"
         chown root:postfix "${CONFDIR}/mail_filter.conf"
-        chmod 640 "${CONFDIR}/mail_filter.conf"
+        chmod 644 "${CONFDIR}/mail_filter.conf"
         echo "${DETECT_MSG}"
         echo "  set [milter] socket = unix:${WANT_SOCKET} in ${CONFDIR}/mail_filter.conf"
     fi
