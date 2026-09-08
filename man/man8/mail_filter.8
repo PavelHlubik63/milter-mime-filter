@@ -1,4 +1,4 @@
-.TH MAIL_FILTER 8 "August 2026" "mail_filter 1.0.3" "System Administration"
+.TH MAIL_FILTER 8 "August 2026" "mail_filter 1.0.4" "System Administration"
 .SH NAME
 mail_filter \- MIME-aware Subject and body milter for Postfix
 .SH SYNOPSIS
@@ -350,25 +350,56 @@ milter_protocol       = 6
 .PP
 The path in
 .B smtpd_milters
-is interpreted relative to the Postfix queue directory.
-On Linux Postfix typically runs inside a chroot at
-.IR /var/spool/postfix ,
-so the socket must reside under that directory tree.
-The default installation places it at
-.IR /var/spool/postfix/private/mail_filter.sock ,
-which is referenced as
-.IR unix:private/mail_filter.sock .
+is resolved relative to the Postfix queue directory, so
+.I unix:private/mail_filter.sock
+names
+.I /var/spool/postfix/private/mail_filter.sock
+when
+.B queue_directory
+has its usual value
+.RB ( "postconf -h queue_directory" ).
+That is where the default installation puts the socket on
+.B both
+platforms, and it is the value the post-install step writes into a freshly
+created
+.IR mail_filter.conf .
 .PP
-On FreeBSD Postfix does not chroot by default.
-The socket is at
-.I /var/run/mail_filter/mail_filter.sock
-and must be referenced using a full absolute path:
+This location is correct whether or not
+.B smtpd
+and
+.B cleanup
+are chrooted. A chrooted process can reach nothing outside
+.BR queue_directory ;
+a non-chrooted one reaches that path as easily as any other. FreeBSD's
+Postfix does not chroot by default and Debian's often does, but neither fact
+changes where the socket belongs \(em and flipping the setting later breaks
+nothing.
+.PP
+An absolute path elsewhere works as well, for as long as nothing is chrooted
+.RB ( "postconf -M" ,
+a
+.B y
+in the chroot column). Set the identical path in
+.B smtpd_milters
+and in the
+.B socket
+setting of
+.IR mail_filter.conf :
 .PP
 .nf
 .RS
 smtpd_milters = unix:/var/run/mail_filter/mail_filter.sock
 .RE
 .fi
+.PP
+.B non_smtpd_milters
+covers mail injected locally, which reaches Postfix through
+.B cleanup
+rather than
+.BR smtpd ;
+omit it and
+.BR sendmail (1)-submitted
+mail passes unfiltered.
 .PP
 If multiple milters are already configured, append the socket path to
 the existing value with a space or comma separator.
@@ -493,7 +524,16 @@ User account under which the Python process runs.
 Group for the Python process.
 .TP
 .B mail_filter_sockdir=/var/run/mail_filter
-Directory that holds the Unix socket and PID file.
+Directory created for the PID file, and for the socket when the
+.B socket
+setting in
+.I mail_filter.conf
+happens to name a path inside it. It is not where the socket lives by
+default: that is
+.I /var/spool/postfix/private/
+\(em see
+.B POSTFIX INTEGRATION
+above.
 .TP
 .B mail_filter_python=/usr/local/bin/python3
 Full path to the Python 3 interpreter.
@@ -777,24 +817,29 @@ for the required rsyslog setting
 .SH TROUBLESHOOTING
 .TP
 .B Milter not reachable \(em mail deferred or accepted without filtering
-Verify the socket path.
-On Linux, confirm the socket is inside the Postfix queue directory
-and that it exists:
+Verify the socket path. The default location is the same on both platforms,
+inside the Postfix queue directory:
 .nf
 .RS
 
 ls \-la /var/spool/postfix/private/mail_filter.sock
 .RE
 .fi
-On FreeBSD:
-.nf
-.RS
-
-ls \-la /var/run/mail_filter/mail_filter.sock
-.RE
-.fi
-If the socket is missing, check whether the milter is running and
-review the log file.
+Compare it with the
+.B socket
+setting in
+.I mail_filter.conf
+and with
+.B smtpd_milters
+in
+.IR main.cf :
+all three must name the same file.
+If the socket is missing while the daemon is running, it failed to bind \(em
+look for
+.B cannot opensocket
+in syslog. A file that is not a socket sitting at that path will cause
+exactly that: libmilter removes a stale socket on startup, but refuses to
+unlink anything else.
 .TP
 .B Rule not matching an expected subject
 Use
@@ -913,22 +958,27 @@ Filter rules.
 .I /etc/mail_filter/mail_filter_whitelist.cidr\ \ (Linux)
 IP/CIDR whitelist.
 .TP
-.I /var/run/mail_filter/mail_filter.sock\ \ (FreeBSD)
-.TQ
-.I /var/spool/postfix/private/mail_filter.sock\ \ (Linux)
-Unix domain socket.
+.I /var/spool/postfix/private/mail_filter.sock\ \ (both platforms)
+Unix domain socket, at the default
+.B socket
+setting. Wherever
+.I mail_filter.conf
+points it, that is where it is.
 .TP
 .I /var/run/mail_filter/mail_filter.pid\ \ (FreeBSD)
 PID file written by
 .IR daemon (8).
 .TP
 .I /var/log/mail_filter.log
-Log file, plus any rotated
-.I mail_filter.log.*
-siblings (see below). On Linux, deleted by
+Log file, plus its rotated siblings (see below). On Linux,
 .B apt purge
-but left untouched by
-.BR "apt remove" .
+deletes the log and the rotated
+.IR mail_filter.log.[0-9]* ;
+.B apt remove
+leaves everything alone. The digit is deliberate: a copy saved under a name
+like
+.I mail_filter.log.save
+survives a purge.
 .TP
 .I /usr/local/etc/rc.d/mail_filter\ \ (FreeBSD)
 rc.d service script.

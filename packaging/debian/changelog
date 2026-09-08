@@ -1,3 +1,37 @@
+mail-filter (1.0.4) unstable; urgency=medium
+
+  * The documentation now says what the package does about the milter socket.
+    README, mail_filter(8) and mail_filter.conf(5) all led with
+    unix:/var/run/mail_filter/mail_filter.sock and offered Postfix's
+    private/ convention as a workaround for a chrooted smtpd. The package
+    has never behaved that way: its post-install step resolves the socket
+    through queue_directory/private/ on both platforms and writes that into
+    a freshly created mail_filter.conf, because that one location is right
+    whether or not smtpd and cleanup are chrooted. mail_filter(8) went
+    further and stated that on FreeBSD the socket "must be referenced using
+    a full absolute path", which is false -- a non-chrooted FreeBSD Postfix
+    reaches unix:private/mail_filter.sock perfectly well.
+
+  * The sample mail_filter.conf ships that path as its default, instead of
+    a value the post-install step immediately replaced.
+
+  * README's Postfix section gained non_smtpd_milters and milter_protocol,
+    without which locally injected mail passes unfiltered.
+
+  * mail_filter(8) no longer describes two socket locations, one per
+    platform, in POSTFIX INTEGRATION, TROUBLESHOOTING and FILES; and it
+    documents mail_filter_sockdir as what it is, the directory for the PID
+    file. Its FILES entry for the log follows 1.0.3's narrower purge glob.
+
+  * A failed bind no longer reports a successful start. The rc.d script
+    waited for a live PID, but libmilter binds the socket on a thread of its
+    own, after the daemon has logged that it is running -- so a bind that
+    failed took the process down a second after "mail_filter running (pid
+    N)" had already been printed. It now waits for the socket to exist, and
+    says so when the daemon is up but never bound.
+
+ -- Pavel Hlubík <phlubik@seznam.cz>  Tue, 08 Sep 2026 17:30:00 +0000
+
 mail-filter (1.0.3) unstable; urgency=medium
 
   * A daemon that dies during startup now says why on FreeBSD. It writes the

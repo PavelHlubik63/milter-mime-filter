@@ -66,6 +66,21 @@ reload_precmd="mail_filter_prereload"
 # configtest: checks the syntax and validity of all configuration files
 configtest_cmd="mail_filter_configtest"
 
+mail_filter_socket_path()
+{
+    # The filesystem path the daemon will bind, as named in the configuration
+    # -- not ${mail_filter_sockdir}, which holds the PID file and only holds
+    # the socket when the configuration happens to put it there. Empty for an
+    # inet: endpoint, which has no path to look at.
+    local raw
+    raw=$(grep -E '^[[:space:]]*socket[[:space:]]*=' "${mail_filter_config}" 2>/dev/null         | tail -1 | sed -E 's/^[^=]*=[[:space:]]*//')
+    case "${raw}" in
+        unix:/*|local:/*) echo "${raw#*:}" ;;
+        /*)               echo "${raw}" ;;
+        *)                echo "" ;;
+    esac
+}
+
 mail_filter_prestart()
 {
     # --- Environmental Inspection ---------------------------------------------------
@@ -151,6 +166,10 @@ mail_filter_poststart()
     local waited=0
     local max=5
     local pid
+    local sock
+    local seen_alive=0
+
+    sock=$(mail_filter_socket_path)
 
     while [ "${waited}" -lt "${max}" ]; do
         sleep 1
@@ -161,17 +180,38 @@ mail_filter_poststart()
         fi
 
         pid=$(cat "${mail_filter_pidfile}" 2>/dev/null)
-        if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
-            echo "mail_filter running (pid ${pid})"
-            return 0
+        if [ -z "${pid}" ] || ! kill -0 "${pid}" 2>/dev/null; then
+            continue
         fi
+        seen_alive=1
+
+        # A live PID is not a working milter. libmilter binds the socket on a
+        # thread of its own, after the daemon has already logged that it is
+        # running, and a bind that fails takes the process down a second or
+        # two later. Waiting for the PID alone therefore reported success for
+        # a milter Postfix could never reach -- so wait for the socket to
+        # actually exist as a socket.
+        if [ -n "${sock}" ] && [ ! -S "${sock}" ]; then
+            continue
+        fi
+
+        echo "mail_filter running (pid ${pid})"
+        return 0
     done
 
     # The process is not running. Show the tail of the log only if this attempt
     # actually wrote to it -- otherwise those lines are from the previous run,
     # and the last of them says the daemon started successfully, which is a
     # thoroughly misleading thing to print underneath "failed to start".
-    warn "mail_filter failed to start after ${max}s"
+    if [ "${seen_alive}" = "1" ] && [ -n "${sock}" ]; then
+        warn "mail_filter started but never bound its socket within ${max}s:"
+        warn "  ${sock}"
+        warn "Postfix cannot reach a milter that is not listening. A file that"
+        warn "is not a socket sitting at that path will do this -- libmilter"
+        warn "removes a stale socket, but refuses to unlink anything else."
+    else
+        warn "mail_filter failed to start after ${max}s"
+    fi
 
     local size_now=0
     if [ -f "${mail_filter_logfile}" ]; then
