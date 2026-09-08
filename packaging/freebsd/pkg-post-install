@@ -15,6 +15,7 @@ PYTHON="@PYTHON_PATH@"
 # The package ships this directory as root:wheel (pkg's default for files
 # with no explicit owner in the manifest); mail_filter runs as postfix, so
 # postfix needs group access to read the config inside it.
+
 chown root:postfix "${CONFDIR}"
 chmod 750 "${CONFDIR}"
 
@@ -34,6 +35,24 @@ for f in mail_filter.conf mail_filter_rules.conf mail_filter_whitelist.cidr emoj
         fi
     else
         echo "  Preserved ${CONFDIR}/${f}"
+    fi
+done
+
+# A preserved file keeps whatever ownership it has, and that is how a
+# configuration the daemon cannot read survives every reinstall: the loop
+# above says "Preserved" and moves on. mail_filter runs as postfix, so a
+# mail_filter.conf left root:wheel mode 640 is readable by root -- and
+# therefore passes --configtest -- while the daemon sees nothing and runs on
+# built-in defaults.
+#
+# Repaired only when it is actually broken, so that deliberate permissions
+# which already work are left alone.
+
+for f in mail_filter.conf mail_filter_rules.conf mail_filter_whitelist.cidr emoji_regex.inc; do
+    if [ -f "${CONFDIR}/${f}" ] && ! su -m postfix -c "test -r ${CONFDIR}/${f}" 2>/dev/null; then
+        chown root:postfix "${CONFDIR}/${f}"
+        chmod 640 "${CONFDIR}/${f}"
+        echo "  Fixed ${CONFDIR}/${f} -- it was not readable by the postfix user"
     fi
 done
 

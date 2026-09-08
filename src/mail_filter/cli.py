@@ -108,10 +108,13 @@ def main() -> None:
     if args.test or args.test_config or args.test_context or _test_switches_used:
         sys.exit(run_test(args))
 
-    if not os.path.exists(state._CONFIG_FILE):
-        print(f"WARN: config file not found: {state._CONFIG_FILE} -- using defaults", file=sys.stderr)
-
-    state.cfg.read(state._CONFIG_FILE)
+    try:
+        if not state.read_config(state.cfg, state._CONFIG_FILE):
+            print(f"WARN: config file not found: {state._CONFIG_FILE} -- using defaults",
+                  file=sys.stderr)
+    except state.ConfigError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     logfile = state.resolve_config_path(
         state._CONFIG_FILE, state.cfg.get("files", "logfile", fallback="/var/log/mail_filter.log")
