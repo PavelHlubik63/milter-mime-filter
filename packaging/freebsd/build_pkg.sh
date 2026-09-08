@@ -153,7 +153,18 @@ find "${STAGEDIR}/usr/local/lib/mail_filter/mail_filter" -name '*.py' -exec chmo
 chmod 0555 "${STAGEDIR}/usr/local/libexec/mail_filter/generate_emoji_regex.py"
 chmod 0555 "${STAGEDIR}/usr/local/libexec/mail_filter/check_regex.py"
 chmod 0755 "${STAGEDIR}/usr/local/etc/rc.d/mail_filter"
-chmod 0640 "${STAGEDIR}"/usr/local/etc/mail_filter/*.sample
+# 0644 rather than 0640, because the directory above is 0750 root:postfix --
+# nothing outside root and the daemon can reach these files whatever their
+# mode, so the group bit protects nothing and costs something. cp preserves
+# the mode of its source (verified on FreeBSD and on Debian; umask does not
+# loosen it back), so a 0640 sample turns
+#
+#     cp mail_filter.conf.sample mail_filter.conf
+#
+# -- the obvious thing for an administrator to do -- into a file the daemon
+# cannot read, because it runs as postfix and the copy is root:wheel. At
+# 0644 the same command produces a working file.
+chmod 0644 "${STAGEDIR}"/usr/local/etc/mail_filter/*.sample
 chmod 0644 "${STAGEDIR}/etc/newsyslog.conf.d/mail_filter.conf"
 chmod 0444 "${STAGEDIR}/usr/local/share/man/man8/mail_filter.8"
 chmod 0444 "${STAGEDIR}/usr/local/share/man/man5/mail_filter.conf.5"
