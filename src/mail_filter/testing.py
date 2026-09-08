@@ -31,7 +31,11 @@ def run_configtest(config_path: Optional[str] = None) -> int:
             return 1
         print(f"    WARN: not found: {config_path} -- using defaults")
     else:
-        cfg.read(config_path)
+        try:
+            state.read_config(cfg, config_path)
+        except state.ConfigError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
         print(f"    OK:   {config_path}")
 
     rules_value = cfg.get("files", "rules", fallback=state._RULES_FALLBACK)
@@ -229,7 +233,11 @@ def run_test(args) -> int:
     if args.test_config and not os.path.exists(config_path):
         print(f"ERROR: test config file not found: {config_path}", file=sys.stderr)
         return 2
-    cfg.read(config_path)
+    try:
+        state.read_config(cfg, config_path)
+    except state.ConfigError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     rules_value = cfg.get("files", "rules", fallback=state._RULES_FALLBACK)
     rules_path = state.resolve_config_path(config_path, rules_value) if args.test_config or not os.path.isabs(rules_value) else rules_value
 
@@ -317,7 +325,11 @@ def run_test_eml(eml_path: str, config_path: Optional[str] = None) -> int:
 
     cfg = configparser.ConfigParser(interpolation=None)
     config_path = config_path or state._CONFIG_FILE
-    cfg.read(config_path)
+    try:
+        state.read_config(cfg, config_path)
+    except state.ConfigError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     rules_value = cfg.get("files", "rules", fallback=state._RULES_FALLBACK)
     rules_path = state.resolve_config_path(config_path, rules_value) if config_path != state._CONFIG_FILE or not os.path.isabs(rules_value) else rules_value
     rules = load_rules(rules_path)

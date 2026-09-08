@@ -1,3 +1,15 @@
+mail-filter (1.0.1) unstable; urgency=medium
+
+  * A configuration file the daemon cannot read is now an error rather than
+    silence. configparser.read() skips a file it cannot open and reports
+    nothing, so a mail_filter.conf left root:wheel mode 640 -- readable by
+    root, and therefore fine to --configtest -- left the daemon running on
+    built-in defaults: default socket, default limits, no [mail_log], and
+    loglevel INFO while the file on disk said WARNING. It looked like it
+    worked, because the defaults are reasonable.
+
+ -- Pavel Hlubík <phlubik@seznam.cz>  Tue, 08 Sep 2026 12:00:00 +0000
+
 mail-filter (1.0.0) unstable; urgency=medium
 
   * Initial packaged release of mail_filter, the unified Subject and body
