@@ -754,3 +754,35 @@ def parse_rules_src(src: str, path: str = "<rules>") -> list:
         raise RuleError(f"{path}: {exc}") from exc
     _validate_backrefs(rules, path)
     return rules
+
+
+def refile_paths(rules: list) -> list:
+    """Every file a parsed rule set read through refile:, once each, in order.
+
+    The daemon reads these as the postfix user too, and one it cannot open
+    fails the whole rules file -- so --configtest has to ask about them as
+    well as about the rules file itself.
+    """
+    found = []
+    seen = set()
+
+    def walk(node):
+        if isinstance(node, (list, tuple)):
+            for item in node:
+                walk(item)
+            return
+        if isinstance(node, RegexSource):
+            if node.is_refile and node.source_path and node.source_path not in seen:
+                seen.add(node.source_path)
+                found.append(node.source_path)
+            return
+        # the AST nodes of this module all declare __slots__; anything else
+        # (compiled regexes, strings, numbers) holds no RegexSource
+        if type(node).__module__ != __name__:
+            return
+        for cls in type(node).__mro__:
+            for name in getattr(cls, "__slots__", ()):
+                walk(getattr(node, name, None))
+
+    walk(rules)
+    return found

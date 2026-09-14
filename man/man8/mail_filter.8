@@ -205,11 +205,39 @@ Validate the configuration, rules, and whitelist files, then exit.
 A structured report is written to standard output.
 Among the checks is whether the user the daemon runs as
 .RB ( postfix )
-can read each of those files. That question is answered for that user
+can read each of those files, and every regex file the rules pull in with
+.BR refile: ,
+which the daemon reads as that user too. That question is answered for that user
 regardless of who runs the test, because root can read a
 .I root:wheel
 mode 0640 file and the daemon cannot; a check that only asked whether the
 caller could read them passed on configurations that then failed at start.
+.IP
+The kernel answers it. Run as root, the test opens each file in a child
+process that has become
+.BR postfix ;
+run as
+.B postfix
+itself, as
+.B service mail_filter configtest
+does on FreeBSD, it simply opens them. Everything that decides access
+counts: owner, group and mode, NFSv4 ACLs on FreeBSD, POSIX ACLs on Linux,
+and MAC policies. A failure names the file or, when that is what stands in
+the way, the directory above it that
+.B postfix
+cannot search, and adds
+.I "denied by an ACL or MAC policy, not by the mode"
+when owner, group and mode alone would have allowed access \(em in which
+case
+.BR chmod (1)
+is not the fix.
+Run as any other user, the test cannot take on
+.BR postfix 's
+identity; it then works the answer out from owner, group and mode, prints a
+.B WARN
+saying that ACLs were not taken into account, and can be wrong about any
+file an ACL affects.
+.IP
 Exit status is 0 if all checks pass, or a positive integer equal to
 the number of errors found.
 This option is equivalent to
@@ -900,7 +928,8 @@ The most common cause is a configuration file the
 .B postfix
 user cannot read;
 .B \-\-configtest
-names it.
+names it, or the directory above it that is in the way, and says when an
+ACL rather than the mode is what denies access.
 .SH FILES
 .TP
 .I /usr/local/sbin/mail_filter\ \ (FreeBSD)

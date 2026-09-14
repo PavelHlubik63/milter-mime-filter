@@ -1,3 +1,40 @@
+mail-filter (1.0.5) unstable; urgency=medium
+
+  * --configtest asks the kernel whether postfix can read the configuration,
+    instead of working it out from owner, group and mode. Run as root it
+    opens each file in a child process that has become postfix; run as
+    postfix it just opens them. The stat() arithmetic it replaces saw
+    nothing else, so ACLs fooled it both ways: a directory opened to postfix
+    by an NFSv4 or POSIX ACL was reported unreadable, and a file closed to it
+    by one was reported readable. Anyone else still gets that arithmetic,
+    now with a WARN saying so.
+
+  * A readability failure names what is actually in the way: the file, or
+    the directory above it that postfix cannot search. "root:wheel 0644 --
+    not readable" for a file under a 0750 /root sent the administrator to
+    chmod a file whose mode was never the problem. When the mode would have
+    allowed access, the message says an ACL or MAC policy denied it.
+
+  * --configtest also checks the regex files the rules pull in with
+    refile:. The daemon reads them as postfix, and one it cannot open fails
+    the whole rules file at startup -- which root, parsing the same rules
+    for the test, never noticed.
+
+  * The post-install repair of an unreadable configuration file checks its
+    own work. It resets owner and mode, which cannot undo a POSIX ACL that
+    denies postfix, and used to report "Fixed" regardless; it now warns when
+    the file is still unreadable. On Debian the configuration directory is
+    now set to root:postfix 0750 before the files are checked rather than
+    after, so a directory postfix could not search no longer makes every
+    file inside it look broken.
+
+  * The rc.d start check, which refuses to start on an unreadable file, no
+    longer tells the administrator to fix the file's ownership or mode when
+    the cause may be an ACL or a directory above it, and points at
+    configtest.
+
+ -- Pavel Hlubík <phlubik@seznam.cz>  Mon, 14 Sep 2026 23:30:00 +0000
+
 mail-filter (1.0.4) unstable; urgency=medium
 
   * The documentation now says what the package does about the milter socket.

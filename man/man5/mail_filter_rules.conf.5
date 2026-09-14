@@ -1,4 +1,4 @@
-.TH MAIL_FILTER_RULES.CONF 5 "August 2026" "mail_filter 1.0.4" "File Formats"
+.TH MAIL_FILTER_RULES.CONF 5 "August 2026" "mail_filter 1.0.5" "File Formats"
 .nh
 .SH NAME
 mail_filter_rules.conf \- policy rules for mail_filter
@@ -347,6 +347,16 @@ and during a SIGUSR1 rules reload.
 Regex files are not opened for each message. An empty regex file is valid
 and never matches. An unreadable file, malformed line, or invalid regular
 expression causes a rules parse error.
+.PP
+The daemon reads regex files as the user it runs as
+.RB ( postfix ),
+so a file root can read and that user cannot fails the rules at startup
+while looking fine to root.
+.B --configtest
+checks every file named by
+.B refile:
+for that user alongside the configuration, rules and whitelist files; see
+.BR mail_filter (8).
 .PP
 When a regex from a referenced file matches, logging and
 .B --test

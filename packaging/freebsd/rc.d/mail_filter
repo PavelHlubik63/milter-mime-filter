@@ -115,11 +115,13 @@ mail_filter_prestart()
     # root can read a root:wheel 0640 file and the postfix user cannot, so
     # asking it here as ourselves would prove nothing. Catching it now puts
     # the reason on the administrator's terminal, instead of leaving a daemon
-    # that exits a second later somewhere out of sight.
+    # that exits a second later somewhere out of sight. test -r is answered
+    # by the kernel, so the cause may as well be an ACL or a directory above
+    # the file as its own mode; --configtest pins it down.
     for _f in "${mail_filter_config}" "${mail_filter_rules}" "${mail_filter_whitelist}"; do
         [ -f "${_f}" ] || continue
         if ! su -m "${mail_filter_runas}" -c "test -r ${_f}" 2>/dev/null; then
-            err 1 "not readable by user '${mail_filter_runas}': ${_f} is $(stat -f '%Sp %Su:%Sg' "${_f}") -- fix its ownership or mode"
+            err 1 "not readable by user '${mail_filter_runas}': ${_f} is $(stat -f '%Sp %Su:%Sg' "${_f}") -- check its ownership, mode and ACL and the directories above it; 'service ${name} configtest' names the cause"
         fi
     done
 

@@ -12,7 +12,20 @@ from . import state
 from .logging_setup import _MAIL_LOG_PRIORITIES, _mail_log_format, _mail_log_format_fields, validate_log_timestamp
 from .mime import _count_entities, _decode_body_for_log, _qp_soft_unfold, decode_header_value, decode_subject
 from .rules_engine import MailContext, apply_rules, load_rules
-from .rules_lang import RuleError, parse_rules_src
+from .rules_lang import RuleError, parse_rules_src, refile_paths
+
+
+def _refile_paths_of(rules_path: str) -> list:
+    """The refile: files the rules file pulls in, for the readability check.
+
+    A rules file that cannot be parsed yields none here; the rules check
+    further down reports why.
+    """
+    try:
+        with open(rules_path, encoding="utf-8") as fh:
+            return refile_paths(parse_rules_src(fh.read(), rules_path))
+    except (OSError, RuleError):
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -47,20 +60,34 @@ def run_configtest(config_path: Optional[str] = None) -> int:
     # read a root:wheel 0640 file, so a --configtest run as root -- the
     # normal way to run it -- used to bless a configuration that would take
     # the daemon down at start, or worse, silently leave it on defaults.
+    # The kernel answers it (ACLs included) whenever this process is root or
+    # already that user; anyone else gets owner/group/mode only, and is told.
     print(f"==> Checking that the daemon user ({state.DAEMON_USER}) can read these files")
-    for path in (config_path, rules_path, whitelist_path):
-        if not os.path.exists(path):
-            continue
-        verdict = state.readable_by_user(path, state.DAEMON_USER)
-        if verdict is None:
-            print(f"    WARN: user {state.DAEMON_USER} does not exist here -- check skipped")
-            break
-        if verdict:
-            print(f"    OK:   {path}")
-        else:
-            print(f"    FAIL: {path} is {state.describe_owner(path)}"
-                  f" -- not readable by {state.DAEMON_USER}")
-            errors += 1
+    if not state.daemon_user_exists():
+        print(f"    WARN: user {state.DAEMON_USER} does not exist here -- check skipped")
+    else:
+        if not state.can_ask_as_user(state.DAEMON_USER):
+            print(f"    WARN: not run as root or {state.DAEMON_USER} -- answered from owner,"
+                  f" group and mode only; ACLs are not taken into account")
+        for path in (config_path, rules_path, whitelist_path, *_refile_paths_of(rules_path)):
+            if not os.path.exists(path):
+                continue
+            result = state.readable_by_user(path, state.DAEMON_USER)
+            if result.verdict is None:
+                print(f"    WARN: {path} -- could not be checked")
+            elif result.verdict:
+                print(f"    OK:   {path}")
+            else:
+                # when the mode would allow it, changing the mode is not the fix
+                why = "" if result.by_mode else " (denied by an ACL or MAC policy, not by the mode)"
+                if result.blocker == os.path.abspath(path):
+                    print(f"    FAIL: {path} is {state.describe_owner(path)}"
+                          f" -- not readable by {state.DAEMON_USER}{why}")
+                else:
+                    print(f"    FAIL: {path} -- directory {result.blocker} is"
+                          f" {state.describe_owner(result.blocker)} and cannot be"
+                          f" searched by {state.DAEMON_USER}{why}")
+                errors += 1
 
     print("==> Checking milter logging settings")
     timestamp_format = cfg.get("milter", "log_timestamp", fallback="bsd").strip()
