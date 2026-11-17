@@ -18,7 +18,7 @@ Postfix's built-in `header_checks` and most lightweight milters (`milter-regex`,
 
 - **RFC 2047 decoding** (Q-encoding and Base64, any advertised charset) of `Subject`, `From`, `To`, `Cc`, `Reply-To`, and arbitrary headers — before matching, not after.
 - **Body matching** on raw UTF-8 text, with quoted-printable soft line-breaks merged back together so patterns spanning `=\r\n` boundaries still match.
-- **One rules DSL** that freely combines subject, body, envelope (`envelope_from`/`envelope_to`), and arbitrary-header conditions in a single rule, with `and` / `or` / `not` (plus legacy `anyof()` / `allof()` / `not()`).
+- **One rules DSL** that freely combines subject, body, envelope (`envelope_from`/`envelope_to`), arbitrary-header, and SMTP client hostname (`client_name`) conditions in a single rule, with `and` / `or` / `not` (plus legacy `anyof()` / `allof()` / `not()`).
 - **External regex lists** via `refile:/path/to/list.inc` (e.g. a maintained emoji-subject list).
 - **CIDR/IP whitelist**, evaluated independently of Postfix `mynetworks`.
 - **Live reload** — `service mail_filter reload` / `systemctl reload mail_filter` — no restart, no dropped connections.
@@ -115,9 +115,15 @@ if subject refile:emoji_regex.inc {
 if subject /invoice/i and body /wire transfer/i {
     reject "Suspicious BEC pattern";
 }
+
+if client_name /\.googleusercontent\.com$/i
+   and (envelope_from /^<support@/i or from /(^|<)support@/i) {
+    reject "Rejected: support@ sender from a Google Cloud VM";
+}
 ```
 
-Conditions: `subject`, `body`, `envelope_from`, `envelope_to` (alias `rcpt_to`), `from`, `to`, `cc`, `reply_to`, `header "Name"`.
+Conditions: `subject`, `body`, `envelope_from`, `envelope_to` (alias `rcpt_to`), `from`, `to`, `cc`, `reply_to`, `header "Name"`, `client_name`.
+`client_name` is the SMTP client's hostname as Postfix verified it (PTR record plus a matching forward lookup), or the address in square brackets, e.g. `[192.0.2.1]`, when it has none.
 Actions: `reject "text";`, `accept;`, `warn "text";`, `dunno;`. Rules run top to bottom; the first `reject`/`accept` stops evaluation. With `add_warn_header = yes` in `mail_filter.conf`, a `warn` also adds an `X-Mail-Filter-Status` header to the delivered message (SpamAssassin-style) — see `mail_filter.conf(5)`.
 
 That header is plain text a mail filter downstream of delivery can act on. For example, a Sieve (Pigeonhole) rule that sends security a copy of anything flagged:

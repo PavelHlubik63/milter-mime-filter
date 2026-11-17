@@ -20,6 +20,7 @@ from .rules_lang import (
     RuleError,
     TestBody,
     TestCcHeader,
+    TestClientName,
     TestEnvelopeFrom,
     TestEnvelopeTo,
     TestFromHeader,
@@ -35,7 +36,7 @@ from .rules_lang import (
 
 class MailContext:
     """The context of the message passed to the condition evaluator."""
-    __slots__ = ("subject", "body", "envelope_from", "envelope_to", "headers")
+    __slots__ = ("subject", "body", "envelope_from", "envelope_to", "headers", "client_name")
 
     def __init__(
         self,
@@ -44,12 +45,17 @@ class MailContext:
         envelope_from: str = "",
         envelope_to: Optional[List[str]] = None,
         headers: Optional[Dict[str, List[str]]] = None,
+        client_name: str = "",
     ):
         self.subject       = subject
         self.body          = body
         self.envelope_from = envelope_from
         self.envelope_to   = envelope_to or []
         self.headers       = headers or {}  # lowercase name -> list of values
+        # The SMTP client's hostname exactly as Postfix handed it to the
+        # milter's connect callback: the verified (forward-confirmed) name,
+        # or the address in square brackets when there is none.
+        self.client_name   = client_name
 
     def get_header(self, name: str) -> List[str]:
         return self.headers.get(name.lower(), [])
@@ -145,6 +151,8 @@ def _eval_cond(cond, ctx: MailContext):
         return _match_test_source(cond.source, ctx.get_header("reply-to"))
     if isinstance(cond, TestHeader):
         return _match_test_source(cond.source, ctx.get_header(cond.name))
+    if isinstance(cond, TestClientName):
+        return _match_test_source(cond.source, [ctx.client_name])
     raise TypeError(f"Unknown condition type: {type(cond)}")
 
 

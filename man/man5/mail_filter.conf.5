@@ -1,4 +1,4 @@
-.TH MAIL_FILTER.CONF 5 "August 2026" "mail_filter 1.0.5" "File Formats"
+.TH MAIL_FILTER.CONF 5 "November 2026" "mail_filter 1.0.6" "File Formats"
 .nh
 .SH NAME
 mail_filter.conf \- configuration file for mail_filter
@@ -241,7 +241,8 @@ This setting has no effect on
 .BR subject ,
 .BR envelope_from ,
 .BR envelope_to ,
-.B header
+.BR header ,
+.B client_name
 or other non-body tests.
 .TP
 .B log_match_max_chars = \fIcharacters\fR
@@ -463,6 +464,13 @@ Message-ID header, or a dash when absent.
 .TP
 .B {client_ip}
 SMTP client IP address seen by the milter.
+.TP
+.B {client_name}
+SMTP client hostname as Postfix passed it to the milter: the verified
+name, or the IP address in square brackets when there is none (the value the
+.B client_name
+rule test sees; see
+.BR mail_filter_rules.conf (5)).
 .TP
 .B {envelope_from}
 SMTP MAIL FROM value.

@@ -234,6 +234,7 @@ def _build_test_ctx(args) -> Tuple[MailContext, str, str, str]:
             envelope_from=data.get("envelope_from", ""),
             envelope_to=data.get("envelope_to", []),
             headers=headers,
+            client_name=data.get("client_name", ""),
         ), subject_raw, subject_dec, body_raw
     else:
         subject_raw = args.subject or ""
@@ -268,6 +269,7 @@ def _build_test_ctx(args) -> Tuple[MailContext, str, str, str]:
             envelope_from=args.envelope_from or "",
             envelope_to=args.envelope_to or [],
             headers=headers,
+            client_name=args.client_name or "",
         ), subject_raw, subject_dec, body_raw
 
 
@@ -302,6 +304,7 @@ def run_test(args) -> int:
     print(f"Subject(decoded): {subject_dec!r}")
     print(f"envelope_from:    {ctx.envelope_from!r}")
     print(f"envelope_to:      {ctx.envelope_to!r}")
+    print(f"client_name:      {ctx.client_name!r}")
     if ctx.headers:
         for k, vs in ctx.headers.items():
             for v in vs:

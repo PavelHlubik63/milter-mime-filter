@@ -51,6 +51,39 @@ def test_test_mode_accepts_non_matching_subject(tmp_path):
     assert "ACCEPT" in result.stdout
 
 
+def _client_name_rule(tmp_path):
+    rules_path = tmp_path / "rules.conf"
+    rules_path.write_text(
+        'if client_name /\\.googleusercontent\\.com$/i and envelope_from /^<support@/i '
+        '{ reject "VM"; }\n', encoding="utf-8")
+    conf_path = tmp_path / "mail_filter.conf"
+    conf_path.write_text(f"[files]\nrules = {rules_path}\n", encoding="utf-8")
+    return conf_path
+
+
+def test_test_mode_client_name_switch(tmp_path):
+    conf_path = _client_name_rule(tmp_path)
+    common = ("--test", "--test-config", str(conf_path),
+              "--envelope-from", "<support@example.net>")
+
+    result = run_mail_filter(*common, "--client-name", "1.2.3.4.bc.googleusercontent.com")
+    assert result.returncode == 1
+    assert "client_name:      '1.2.3.4.bc.googleusercontent.com'" in result.stdout
+
+    result = run_mail_filter(*common, "--client-name", "mail.example.net")
+    assert result.returncode == 0
+
+
+def test_test_mode_client_name_from_json_context(tmp_path):
+    conf_path = _client_name_rule(tmp_path)
+    context = tmp_path / "ctx.json"
+    context.write_text('{"envelope_from": "<support@example.net>", '
+                       '"client_name": "1.2.3.4.bc.googleusercontent.com"}', encoding="utf-8")
+    result = run_mail_filter("--test", "--test-config", str(conf_path),
+                             "--test-context", str(context))
+    assert result.returncode == 1
+
+
 def test_version_flag():
     result = run_mail_filter("--version")
     assert result.returncode == 0

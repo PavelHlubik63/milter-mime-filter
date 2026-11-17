@@ -1,4 +1,4 @@
-.TH MAIL_FILTER_RULES.CONF 5 "August 2026" "mail_filter 1.0.5" "File Formats"
+.TH MAIL_FILTER_RULES.CONF 5 "November 2026" "mail_filter 1.0.6" "File Formats"
 .nh
 .SH NAME
 mail_filter_rules.conf \- policy rules for mail_filter
@@ -22,7 +22,8 @@ recipients (RCPT TO), and any message header including
 .IR Cc ,
 .I Reply-To
 and arbitrary
-.I X\-headers
+.IR X\-headers ,
+and the hostname of the connecting SMTP client
 \(em in the same rule, if needed. This makes it possible to write a
 single rule such as \(lqreject if the Subject looks like an invoice AND
 the body asks for a wire transfer\(rq.
@@ -288,6 +289,51 @@ The name is case-insensitive.
 True if the pattern matches
 .I any
 occurrence when the header appears multiple times.
+.TP
+.BI client_name " /pattern/flags"
+Match the hostname of the SMTP client that delivered the message, exactly
+as Postfix passed it to the milter when the connection was opened \(em
+the same name Postfix itself logs in its
+.I client=
+lines and offers as its
+.I {client_name}
+macro. This is the
+.I verified
+name: the client's IP address must have a PTR record
+.B and
+that name must resolve back to the same address, so a sender cannot
+choose it by setting a PTR record alone. When the client has no verified
+name, Postfix passes the IP address in square brackets instead, e.g.\&
+.IR [192.0.2.1] ,
+so
+.I "client_name /^\e[/"
+matches every such client. Mail submitted locally rather than over SMTP
+(through
+.BR non_smtpd_milters ,
+e.g.\& from
+.BR sendmail (1)
+or cron) arrives with the name
+.IR localhost .
+.IP
+The name has no angle brackets and no trailing dot; anchor with
+.B $
+to match the domain and nothing after it, e.g.\&
+.I /\e.googleusercontent\e.com$/i
+\(em without the anchor the pattern would also match a name such as
+.IR x.googleusercontent.com.example.net .
+The Postfix-prepended
+.I Received:
+header, which also carries this name, is hidden from milters (see
+Postfix's MILTER_README), and every other
+.I Received:
+header was written by the sending side; test
+.B client_name
+rather than
+.IR "header \(dqReceived\(dq" .
+.IP
+Messages from a whitelisted client address (see
+.BR mail_filter_whitelist.cidr (5))
+never reach the rules, whatever their client name.
 .SS Regex files (refile:)
 Instead of an inline regex, any test may refer to a file of regular
 expressions using:
@@ -692,8 +738,9 @@ only allowed directly inside a single regex-based condition
 .IR to ,
 .IR cc ,
 .IR reply_to ,
+.IR header ,
 or
-.IR header ),
+.IR client_name ),
 or an
 .B anyof(...)
 of such conditions (the one that actually matched supplies the groups).
@@ -963,6 +1010,50 @@ if subject /urgent|ASAP|confidential/i
 }
 .RE
 .fi
+.SS Combining the client name with envelope and header senders
+Rented cloud VMs keep their provider's default PTR name unless the
+customer sets a different one \(em on Google Cloud
+.IR 166.255.116.136.bc.googleusercontent.com .
+Google's own mail servers use other names
+.RI ( *.google.com ),
+so that domain identifies a VM rather than Google's mail service.
+Spam from such VMs commonly poses as a shop's customer service with a
+.I support@
+sender, in the envelope, in the
+.I From:
+header, or in both. This rule rejects that combination and nothing else:
+.nf
+.RS
+if client_name /\e.googleusercontent\e.com$/i
+   and (envelope_from /^<support@/i or from /(^|<)support@/i) {
+    reject "Rejected: support@ sender from a Google Cloud VM";
+}
+.RE
+.fi
+The parentheses matter: without them,
+.B and
+binds tighter than
+.B or
+and the rule would reject every
+.I From: support@...
+message from any client (see
+.B "Operator-precedence pitfall"
+above). The
+.I From:
+pattern accepts the address both bare
+.RI ( support@shop.example )
+and after a display name
+.RI ( "Shop <support@shop.example>" ),
+but not
+.IR techsupport@ .
+Try it before enabling it:
+.nf
+.RS
+mail_filter --test \e
+    --client-name 166.255.116.136.bc.googleusercontent.com \e
+    --from "Customer Care <support@shop.example>"
+.RE
+.fi
 .SH TESTING
 Test a message context against the current rules without sending mail.
 By default the normal system configuration is used. To test an alternate
@@ -985,7 +1076,8 @@ Test switches are grouped into a Subject/envelope/header group
 .BR --envelope-to ,
 .BR --from ,
 .BR --to ,
-.BR --header )
+.BR --header ,
+.BR --client-name )
 and a body group
 .RB ( --body " / " --body-file ).
 Both groups can be combined freely in one
@@ -1043,7 +1135,9 @@ mail_filter --test --test-config /tmp/mail_filter-test/mail_filter.conf \e
     --subject "Invoice 2024"
 
 # Test an entire EML file (subject, body and MIME parts are extracted
-# automatically; --subject/--body/--test-context are ignored if also given)
+# automatically; --subject/--body/--test-context are ignored if also given).
+# A saved message carries no SMTP session, so the envelope and client_name
+# are empty here -- use --test for rules that depend on them.
 mail_filter --test-eml /tmp/suspect-message.eml
 .RE
 .fi
@@ -1059,6 +1153,7 @@ envelope and headers:
   "body": "Please wire the outstanding balance to our new account.",
   "envelope_from": "<supplier@external-domain.com>",
   "envelope_to": ["<accounting@example.com>", "<director@example.com>"],
+  "client_name": "mail.external-domain.com",
   "headers": {
     "From": "Dodavatel <supplier@external-domain.com>",
     "X-Spam-Score": "2.1"
@@ -1079,7 +1174,7 @@ When such a conflicting combination is detected, mail_filter prints a
 line to standard error naming the switches that were ignored, then
 proceeds using the higher-priority option; it does not abort. Combining
 plain
-.BR --subject / --envelope-* / --from / --to / --header
+.BR --subject / --envelope-* / --from / --to / --header / --client-name
 switches with plain
 .B --body / --body-file
 switches is

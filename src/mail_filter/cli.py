@@ -42,15 +42,15 @@ def main() -> None:
     tg_ctl.add_argument("--test-context", metavar="FILE",
                         help="JSON file containing the full message context (subject, body, "
                              "envelope, headers) for --test. Takes precedence over --subject/"
-                             "--body/--envelope-*/--from/--to/--header if both are given.")
+                             "--body/--envelope-*/--from/--to/--header/--client-name if both are given.")
     tg_ctl.add_argument("--test-eml", metavar="EML_FILE", dest="test_eml",
                         help="Test an EML file (0=ACCEPT, 1=REJECT)")
 
     tg_subj = parser.add_argument_group(
         "rule testing -- Subject/envelope/header options",
         "Feed the \"subject\", \"envelope_from\", \"envelope_to\", \"from\", \"to\", "
-        "\"cc\", \"reply_to\", and \"header\" tests. Combine freely with the body "
-        "options below in the same --test invocation.",
+        "\"cc\", \"reply_to\", \"header\", and \"client_name\" tests. Combine freely "
+        "with the body options below in the same --test invocation.",
     )
     tg_subj.add_argument("--subject",       metavar="SUBJECT",  help="Subject header (raw)")
     tg_subj.add_argument("--envelope-from", metavar="ADDR",     dest="envelope_from")
@@ -59,6 +59,9 @@ def main() -> None:
     tg_subj.add_argument("--to",            metavar="ADDR",     dest="to_header")
     tg_subj.add_argument("--header",        metavar="NAME:VAL", action="append",
                         help='Add a header, e.g., --header "X-Spam-Score: 8.5"')
+    tg_subj.add_argument("--client-name",   metavar="HOST",     dest="client_name",
+                        help="SMTP client hostname as Postfix reports it, e.g. "
+                             "1.2.3.4.bc.googleusercontent.com or [192.0.2.1]")
 
     tg_body = parser.add_argument_group(
         "rule testing -- body options",
@@ -74,6 +77,7 @@ def main() -> None:
     _test_switches_used = (
         args.subject or args.body or args.body_file or args.envelope_from
         or args.envelope_to or args.from_header or args.to_header or args.header
+        or args.client_name
     )
     _any_test_mode = args.test or args.test_context or args.test_eml or _test_switches_used
 
@@ -90,7 +94,7 @@ def main() -> None:
     if args.test_eml and (args.test_context or _test_switches_used):
         print(
             "WARN: --test-eml was given together with --test-context/--subject/--body/"
-            "--envelope-*/--from/--to/--header -- --test-eml builds its own message "
+            "--envelope-*/--from/--to/--header/--client-name -- --test-eml builds its own message "
             "context from the EML file and the other test switches are ignored.",
             file=sys.stderr,
         )
@@ -100,7 +104,7 @@ def main() -> None:
     if args.test_context and _test_switches_used:
         print(
             "WARN: --test-context was given together with --subject/--body/--envelope-*/"
-            "--from/--to/--header -- --test-context takes precedence and the other "
+            "--from/--to/--header/--client-name -- --test-context takes precedence and the other "
             "test switches are ignored.",
             file=sys.stderr,
         )

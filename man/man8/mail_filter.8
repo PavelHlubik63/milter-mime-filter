@@ -1,4 +1,4 @@
-.TH MAIL_FILTER 8 "August 2026" "mail_filter 1.0.4" "System Administration"
+.TH MAIL_FILTER 8 "November 2026" "mail_filter 1.0.6" "System Administration"
 .SH NAME
 mail_filter \- MIME-aware Subject and body milter for Postfix
 .SH SYNOPSIS
@@ -101,7 +101,10 @@ templates automatically.
 .SS Rule Evaluation
 Rules are read from the rules file and evaluated in order.
 Conditions may test the decoded Subject, the raw message body, envelope
-addresses, and decoded, unfolded message headers, combined with
+addresses, decoded, unfolded message headers, and the verified hostname
+of the connecting SMTP client
+.RB ( client_name ),
+combined with
 .BR and , " " or ", and " not
 (or the legacy
 .BR anyof / allof / not
@@ -329,6 +332,15 @@ Set a To: header value. It is unfolded and RFC 2047 decoded before matching.
 .TP
 .BI \-\-header " Name:Value"
 Add an arbitrary message header. This option may be specified more than once. Header values are unfolded and RFC 2047 decoded before matching.
+.TP
+.BI \-\-client\-name " host"
+Set the SMTP client hostname seen by
+.B client_name
+tests, written the way Postfix reports it: a verified name such as
+.IR 1.2.3.4.bc.googleusercontent.com ,
+or the address in square brackets, e.g.\&
+.IR [192.0.2.1] ,
+for a client without one. Empty when not given.
 .SS Body test options
 .TP
 .BI \-\-body " text"
@@ -355,6 +367,9 @@ mail_filter \-\-test \-\-body 'please wire the funds to our new account'
 
 # Combined Subject + body test (e.g. a BEC-style rule)
 mail_filter \-\-test \-\-subject 'urgent payment' \-\-body 'please wire the funds' \-\-envelope\-from '<ceo@external.example.com>'
+
+# Client name + envelope sender (e.g. support@ mail from a rented cloud VM)
+mail_filter \-\-test \-\-client\-name '166.255.116.136.bc.googleusercontent.com' \-\-envelope\-from '<support@shop.example>'
 
 # Whole message file
 mail_filter \-\-test\-eml /tmp/suspect-message.eml
@@ -786,7 +801,7 @@ On FreeBSD the normal destination is
 .IR /var/log/maillog .
 Local syslog configuration ultimately determines the destination.
 .PP
-The template can use queue ID, Message-ID, client IP, envelope addresses,
+The template can use queue ID, Message-ID, client IP and name, envelope addresses,
 selected address headers, raw and decoded Subject, decoding status, final
 milter result, warning information, and matching-rule details. See
 .BR mail_filter.conf (5)

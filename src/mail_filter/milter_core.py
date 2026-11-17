@@ -59,6 +59,7 @@ class MailFilter(Milter.Base):
     def __init__(self):
         self._id:            int            = Milter.uniqueID()
         self._ip:            str            = "unknown"
+        self._client_name:   str            = ""
         self._whitelisted:   bool           = False
         self._env_from:      str            = ""
         self._env_rcpt:      List[str]      = []
@@ -88,6 +89,12 @@ class MailFilter(Milter.Base):
     @Milter.noreply
     def connect(self, hostname, family, hostaddr):
         self._ip = hostaddr[0] if hostaddr else "unknown"
+        # Postfix passes its own verified client name here (the same value
+        # as its {client_name} macro), with the address in square brackets
+        # in place of "unknown", and "localhost" for mail submitted through
+        # non_smtpd_milters -- a sender cannot choose it by setting a PTR
+        # record alone, since the name must also resolve back to the IP.
+        self._client_name = hostname or ""
         self._whitelisted = in_whitelist(self._ip, state.whitelist)
         log.debug("[%d] CONNECT ip=%s host=%s%s",
                   self._id, self._ip, hostname,
@@ -192,6 +199,7 @@ class MailFilter(Milter.Base):
             "qid": qid,
             "message_id": msgid,
             "client_ip": self._ip,
+            "client_name": self._client_name or "-",
             "envelope_from": self._env_from or "-",
             "envelope_to": envelope_to,
             "header_from": header_from,
@@ -238,6 +246,7 @@ class MailFilter(Milter.Base):
             envelope_from=self._env_from,
             envelope_to=list(self._env_rcpt),
             headers=dict(self._headers),
+            client_name=self._client_name,
         )
 
         result, warns, path = apply_rules(state.rules, ctx)

@@ -1,3 +1,25 @@
+mail-filter (1.0.6) unstable; urgency=medium
+
+  * New rule test client_name: the hostname of the SMTP client that
+    delivered the message, as Postfix passed it to the milter when the
+    connection was opened -- the verified name (PTR record plus a forward
+    lookup back to the same address), or the address in square brackets
+    when there is none. Postfix hides its own Received: header from milters
+    and every other Received: header comes from the sending side, so until
+    now no rule could ask which host it was talking to. It combines with
+    the other tests as usual, e.g. to reject support@ senders arriving from
+    rented Google Cloud VMs (*.googleusercontent.com); the sample rules
+    carry that rule as a new section 12.
+
+  * --test takes --client-name, and a --test-context JSON file a
+    "client_name" key, to try such rules without sending mail. --test-eml
+    leaves it empty, as it does the envelope: a saved message has no SMTP
+    session.
+
+  * [mail_log] format templates may use {client_name}.
+
+ -- Pavel Hlubík <phlubik@seznam.cz>  Tue, 17 Nov 2026 20:00:00 +0000
+
 mail-filter (1.0.5) unstable; urgency=medium
 
   * --configtest asks the kernel whether postfix can read the configuration,

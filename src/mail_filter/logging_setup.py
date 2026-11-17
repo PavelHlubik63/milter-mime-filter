@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 log = logging.getLogger("mail_filter")
 
 _MAIL_LOG_FIELDS = {
-    "qid", "message_id", "client_ip", "envelope_from", "envelope_to",
+    "qid", "message_id", "client_ip", "client_name", "envelope_from", "envelope_to",
     "header_from", "header_from_raw", "header_to", "header_to_raw",
     "header_cc", "header_cc_raw", "reply_to", "reply_to_raw", "x_original_to",
     "delivered_to", "subject_raw", "subject_decoded", "decode_error",

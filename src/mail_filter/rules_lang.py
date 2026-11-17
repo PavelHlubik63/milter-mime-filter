@@ -103,6 +103,9 @@ class TestCcHeader(_RegexTest):
 class TestReplyTo(_RegexTest):
     pass
 
+class TestClientName(_RegexTest):
+    pass
+
 class TestHeader:
     __slots__ = ("name", "source")
     def __init__(self, name, source):
@@ -229,7 +232,7 @@ _KEYWORDS = {
     "if", "else", "anyof", "allof", "not", "and", "or",
     "reject", "accept", "warn", "dunno",
     "subject", "body", "envelope_from", "envelope_to", "rcpt_to",
-    "from", "to", "cc", "reply_to", "header",
+    "from", "to", "cc", "reply_to", "header", "client_name",
 }
 
 _UNICODE_ESC_RE = re.compile(r"\\U[0-9A-Fa-f]{8}|\\u[0-9A-Fa-f]{4}")
@@ -495,7 +498,7 @@ class Parser:
     # alternative to writing a long chain of "and"/"or".
     #
     # Every test (subject, body, header "...", from, to, cc, reply_to,
-    # envelope_from, envelope_to, rcpt_to) accepts either a regex source
+    # envelope_from, envelope_to, rcpt_to, client_name) accepts either a regex source
     # (/pattern/flags or refile:/path) OR a numeric comparison
     # (>, <, >=, <=, ==, != followed by a number). The numeric form parses a
     # leading number out of the field's value and compares it -- e.g.
@@ -573,6 +576,7 @@ class Parser:
             "to":            TestToHeader,
             "cc":            TestCcHeader,
             "reply_to":      TestReplyTo,
+            "client_name":   TestClientName,
         }
         if kw not in _MAP:
             raise RuleError(f"Unknown test keyword {kw!r}", tok.line)
@@ -696,7 +700,7 @@ def _collect_regex_entries_for_backref(cond, action_line: int) -> List["RegexEnt
     if not isinstance(source, RegexSource):
         raise RuleError(
             "$N in a reject/warn message needs a regex-based condition "
-            "(subject/body/envelope_from/envelope_to/from/to/cc/reply_to/header), "
+            "(subject/body/envelope_from/envelope_to/from/to/cc/reply_to/header/client_name), "
             "not a numeric comparison", action_line,
         )
     return list(source.entries)
