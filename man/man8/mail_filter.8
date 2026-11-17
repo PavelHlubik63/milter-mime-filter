@@ -1,4 +1,4 @@
-.TH MAIL_FILTER 8 "November 2026" "mail_filter 1.0.6" "System Administration"
+.TH MAIL_FILTER 8 "November 2026" "mail_filter 1.0.7" "System Administration"
 .SH NAME
 mail_filter \- MIME-aware Subject and body milter for Postfix
 .SH SYNOPSIS
@@ -653,7 +653,9 @@ Postfix queue ID.
 Value of the Message-ID header.
 .TP
 .B ip
-Client IP address.
+Client IP address. Its hostname is
+.B client_name
+at the end of the line.
 .TP
 .B envelope_from
 SMTP envelope sender (MAIL FROM). This is distinct from the message's
@@ -732,6 +734,16 @@ match identifies the referenced regex file, its line number, and the exact
 .I /pattern/flags
 literal. A dash means the successful path contained no positive regex
 match, for example a true negated condition or an else branch.
+.TP
+.B client_name
+SMTP client hostname as Postfix passed it to the milter: the verified name,
+the IP address in square brackets when there is none, or
+.I localhost
+for locally submitted mail \(em the value the
+.B client_name
+rule test sees. Always the last field of the line, on every result line
+at every log level, so that scripts reading the fields before it are not
+affected.
 .PP
 Log levels:
 .TP 12

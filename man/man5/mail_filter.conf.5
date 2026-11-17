@@ -1,4 +1,4 @@
-.TH MAIL_FILTER.CONF 5 "November 2026" "mail_filter 1.0.6" "File Formats"
+.TH MAIL_FILTER.CONF 5 "November 2026" "mail_filter 1.0.7" "File Formats"
 .nh
 .SH NAME
 mail_filter.conf \- configuration file for mail_filter
@@ -448,7 +448,7 @@ The default template is:
 .PP
 .nf
 .RS
-format = {qid}:\\theader Subject: '{subject_decoded}'\\teFrom: '{envelope_from}'\\thFrom: '{header_from}'\\tbody_size={body_size_bytes}\\tentity_count={entity_count}
+format = {qid}:\\theader Subject: '{subject_decoded}'\\teFrom: '{envelope_from}'\\thFrom: '{header_from}'\\tbody_size={body_size_bytes}\\tentity_count={entity_count}\\tclient_name={client_name}
 .RE
 .fi
 .PP

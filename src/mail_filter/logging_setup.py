@@ -32,7 +32,12 @@ _MAIL_LOG_PRIORITIES = {
     "debug": syslog.LOG_DEBUG,
 }
 _mail_log_enabled = False
-_mail_log_format = "{qid}:\\theader Subject: '{subject_decoded}'\\teFrom: '{envelope_from}'\\thFrom: '{header_from}'\\tbody_size={body_size_bytes}"
+# Documented as "The default template" in mail_filter.conf(5); keep the two in step.
+_DEFAULT_MAIL_LOG_FORMAT = (
+    "{qid}:\\theader Subject: '{subject_decoded}'\\teFrom: '{envelope_from}'\\thFrom: '{header_from}'"
+    "\\tbody_size={body_size_bytes}\\tentity_count={entity_count}\\tclient_name={client_name}"
+)
+_mail_log_format = _DEFAULT_MAIL_LOG_FORMAT
 _mail_log_priority = syslog.LOG_WARNING
 
 
@@ -66,7 +71,7 @@ def setup_mail_log(cfg: configparser.ConfigParser) -> None:
     _mail_log_enabled = cfg.getboolean("mail_log", "enabled", fallback=False)
     _mail_log_format = cfg.get(
         "mail_log", "format",
-        fallback="{qid}:\\theader Subject: '{subject_decoded}'\\teFrom: '{envelope_from}'\\thFrom: '{header_from}'\\tbody_size={body_size_bytes}",
+        fallback=_DEFAULT_MAIL_LOG_FORMAT,
     )
     priority_name = cfg.get("mail_log", "priority", fallback="warning").strip().lower()
     if priority_name not in _MAIL_LOG_PRIORITIES:

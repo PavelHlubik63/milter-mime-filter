@@ -9,7 +9,7 @@ import sys
 from typing import Optional, Tuple
 
 from . import state
-from .logging_setup import _MAIL_LOG_PRIORITIES, _mail_log_format, _mail_log_format_fields, validate_log_timestamp
+from .logging_setup import _DEFAULT_MAIL_LOG_FORMAT, _MAIL_LOG_PRIORITIES, _mail_log_format_fields, validate_log_timestamp
 from .mime import _count_entities, _decode_body_for_log, _qp_soft_unfold, decode_header_value, decode_subject
 from .rules_engine import MailContext, apply_rules, load_rules
 from .rules_lang import RuleError, parse_rules_src, refile_paths
@@ -186,7 +186,7 @@ def run_configtest(config_path: Optional[str] = None) -> int:
         print(f"    FAIL: unknown priority: {priority_name!r}")
         errors += 1
         settings_ok = False
-    mail_format = cfg.get("mail_log", "format", fallback=_mail_log_format)
+    mail_format = cfg.get("mail_log", "format", fallback=_DEFAULT_MAIL_LOG_FORMAT)
     try:
         fields = _mail_log_format_fields(mail_format)
         if enabled and not fields:

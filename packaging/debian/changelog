@@ -1,3 +1,20 @@
+mail-filter (1.0.7) unstable; urgency=medium
+
+  * Every message line in the application log ends with client_name=, the
+    SMTP client hostname from 1.0.6, at every log level. It is appended as
+    the last field so that scripts reading the fields before it keep
+    working.
+
+  * The [mail_log] record carries it too: the sample mail_filter.conf adds
+    \tclient_name={client_name} to the end of its format line, and so does
+    the built-in default used when there is no format line. That built-in
+    default also gains \tentity_count={entity_count}, which
+    mail_filter.conf(5) has always listed as part of it but the code left
+    out. Existing configuration files keep their own format line; add the
+    field there by hand if wanted.
+
+ -- Pavel Hlubík <phlubik@seznam.cz>  Tue, 17 Nov 2026 21:00:00 +0000
+
 mail-filter (1.0.6) unstable; urgency=medium
 
   * New rule test client_name: the hostname of the SMTP client that

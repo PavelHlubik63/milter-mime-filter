@@ -228,11 +228,11 @@ class MailFilter(Milter.Base):
         }
 
         if self._whitelisted:
-            log.info("[%d] qid=%s msgid=%s result=ACCEPT reason=whitelisted ip=%s envelope_from=%r envelope_to=%r header_from=%r header_to=%r x_original_to=%r delivered_to=%r subject_raw=%r subject_decoded=%r body_size=%d entity_count=%d",
+            log.info("[%d] qid=%s msgid=%s result=ACCEPT reason=whitelisted ip=%s envelope_from=%r envelope_to=%r header_from=%r header_to=%r x_original_to=%r delivered_to=%r subject_raw=%r subject_decoded=%r body_size=%d entity_count=%d client_name=%r",
                      self._id, qid, msgid, self._ip, self._env_from or "-", envelope_to,
                      header_from, header_to, x_original_to, delivered_to,
                      self._subject_raw if self._subject_raw is not None else "-", decoded,
-                     self._body_size, entity_count)
+                     self._body_size, entity_count, self._client_name or "-")
             _write_mail_log({**base_log, "reason": "whitelisted"})
             return Milter.ACCEPT
 
@@ -259,10 +259,10 @@ class MailFilter(Milter.Base):
 
         if result is None:
             level = log.warning if warns or decode_error != "-" else log.info
-            level("[%d] qid=%s msgid=%s result=ACCEPT reason=no_rule_matched ip=%s envelope_from=%r envelope_to=%r header_from=%r header_to=%r x_original_to=%r delivered_to=%r subject_raw=%r subject_decoded=%r decode_error=%r body_size=%d entity_count=%d warn=%r warn_rules=%r",
+            level("[%d] qid=%s msgid=%s result=ACCEPT reason=no_rule_matched ip=%s envelope_from=%r envelope_to=%r header_from=%r header_to=%r x_original_to=%r delivered_to=%r subject_raw=%r subject_decoded=%r decode_error=%r body_size=%d entity_count=%d warn=%r warn_rules=%r client_name=%r",
                   self._id, qid, msgid, self._ip, self._env_from or "-", envelope_to,
                   header_from, header_to, x_original_to, delivered_to, self._subject_raw, decoded,
-                  decode_error, self._body_size, entity_count, warn_text, warn_rules)
+                  decode_error, self._body_size, entity_count, warn_text, warn_rules, self._client_name or "-")
             _write_mail_log({**base_log, "reason": "no_rule_matched", "warn": warn_text, "warn_rules": warn_rules})
             self._add_warn_header(warns)
             return Milter.ACCEPT
@@ -272,10 +272,10 @@ class MailFilter(Milter.Base):
 
         if result[0] == "REJECT":
             msg = result[1]
-            log.warning("[%d] qid=%s msgid=%s result=REJECT ip=%s envelope_from=%r envelope_to=%r header_from=%r header_to=%r x_original_to=%r delivered_to=%r subject_raw=%r subject_decoded=%r decode_error=%r body_size=%d entity_count=%d msg=%r rule_line=%s matched=%s warn=%r warn_rules=%r",
+            log.warning("[%d] qid=%s msgid=%s result=REJECT ip=%s envelope_from=%r envelope_to=%r header_from=%r header_to=%r x_original_to=%r delivered_to=%r subject_raw=%r subject_decoded=%r decode_error=%r body_size=%d entity_count=%d msg=%r rule_line=%s matched=%s warn=%r warn_rules=%r client_name=%r",
                         self._id, qid, msgid, self._ip, self._env_from or "-", envelope_to,
                         header_from, header_to, x_original_to, delivered_to, self._subject_raw, decoded,
-                        decode_error, self._body_size, entity_count, msg, rule_line, matched, warn_text, warn_rules)
+                        decode_error, self._body_size, entity_count, msg, rule_line, matched, warn_text, warn_rules, self._client_name or "-")
             _write_mail_log({**base_log, "result": "REJECT", "reason": msg, "warn": warn_text,
                 "warn_rules": warn_rules, "rule_line": rule_line, "matched": matched})
             self.setreply("550", "5.7.1", msg)
@@ -283,19 +283,19 @@ class MailFilter(Milter.Base):
 
         if result[0] == "ACCEPT":
             level = log.warning if warns or decode_error != "-" else log.info
-            level("[%d] qid=%s msgid=%s result=ACCEPT reason=rule ip=%s envelope_from=%r envelope_to=%r header_from=%r header_to=%r x_original_to=%r delivered_to=%r subject_raw=%r subject_decoded=%r decode_error=%r body_size=%d entity_count=%d rule_line=%s matched=%s warn=%r warn_rules=%r",
+            level("[%d] qid=%s msgid=%s result=ACCEPT reason=rule ip=%s envelope_from=%r envelope_to=%r header_from=%r header_to=%r x_original_to=%r delivered_to=%r subject_raw=%r subject_decoded=%r decode_error=%r body_size=%d entity_count=%d rule_line=%s matched=%s warn=%r warn_rules=%r client_name=%r",
                   self._id, qid, msgid, self._ip, self._env_from or "-", envelope_to,
                   header_from, header_to, x_original_to, delivered_to, self._subject_raw, decoded,
-                  decode_error, self._body_size, entity_count, rule_line, matched, warn_text, warn_rules)
+                  decode_error, self._body_size, entity_count, rule_line, matched, warn_text, warn_rules, self._client_name or "-")
             _write_mail_log({**base_log, "reason": "rule", "warn": warn_text, "warn_rules": warn_rules,
                 "rule_line": rule_line, "matched": matched})
             self._add_warn_header(warns)
             return Milter.ACCEPT
 
-        log.info("[%d] qid=%s msgid=%s result=ACCEPT reason=fallthrough ip=%s envelope_from=%r envelope_to=%r header_from=%r header_to=%r x_original_to=%r delivered_to=%r subject_raw=%r subject_decoded=%r decode_error=%r body_size=%d entity_count=%d warn=%r warn_rules=%r",
+        log.info("[%d] qid=%s msgid=%s result=ACCEPT reason=fallthrough ip=%s envelope_from=%r envelope_to=%r header_from=%r header_to=%r x_original_to=%r delivered_to=%r subject_raw=%r subject_decoded=%r decode_error=%r body_size=%d entity_count=%d warn=%r warn_rules=%r client_name=%r",
                  self._id, qid, msgid, self._ip, self._env_from or "-", envelope_to,
                  header_from, header_to, x_original_to, delivered_to, self._subject_raw, decoded,
-                 decode_error, self._body_size, entity_count, warn_text, warn_rules)
+                 decode_error, self._body_size, entity_count, warn_text, warn_rules, self._client_name or "-")
         _write_mail_log({**base_log, "reason": "fallthrough", "warn": warn_text, "warn_rules": warn_rules})
         self._add_warn_header(warns)
         return Milter.ACCEPT
